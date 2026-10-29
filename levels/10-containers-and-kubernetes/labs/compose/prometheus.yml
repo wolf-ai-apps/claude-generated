@@ -1,0 +1,6 @@
+global: { scrape_interval: 5s }
+scrape_configs:
+  - job_name: engines
+    static_configs: [{ targets: ["replica-a:8000", "replica-b:8000", "replica-c:8000"] }]
+  - job_name: gateway
+    static_configs: [{ targets: ["gateway:9000"] }]

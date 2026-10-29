@@ -1,0 +1,27 @@
+# Auto Mode GPU NodePool. Karpenter launches the cheapest instance that satisfies
+# pending pods' requests within these requirements, and removes it when empty.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: { name: gpu }
+spec:
+  template:
+    spec:
+      nodeClassRef: { group: eks.amazonaws.com, kind: NodeClass, name: default }
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]          # add "spot" only after level 14's interruption lab
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: eks.amazonaws.com/instance-family
+          operator: In
+          values: ["g6", "g6e"]          # L4 24GB and L40S 48GB
+      taints:
+        - { key: nvidia.com/gpu, effect: NoSchedule }   # only pods that tolerate it land here
+      expireAfter: 336h
+  limits:
+    nvidia.com/gpu: 8                    # hard cap on GPUs this pool may create (cost guardrail)
+  disruption:
+    consolidationPolicy: WhenEmpty       # never evict a busy inference pod to save money
+    consolidateAfter: 10m

@@ -1,0 +1,37 @@
+# Scale vLLM replicas on queue depth. New replicas create pending GPU pods,
+# which makes the NodePool launch GPU nodes: two autoscalers in a chain.
+# Install KEDA:  helm install keda kedacore/keda -n keda --create-namespace
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: vllm, namespace: inference }
+spec:
+  scaleTargetRef: { name: vllm }
+  minReplicaCount: 1
+  maxReplicaCount: 4
+  pollingInterval: 15
+  cooldownPeriod: 600
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp: { stabilizationWindowSeconds: 0, policies: [{ type: Pods, value: 2, periodSeconds: 60 }] }
+        scaleDown: { stabilizationWindowSeconds: 600, policies: [{ type: Pods, value: 1, periodSeconds: 300 }] }
+  triggers:
+    # 1) Concurrency: requests in the system (running + waiting) per replica.
+    #    AverageValue: desired = ceil(total / threshold). Target 48 of --max-num-seqs=64,
+    #    leaving headroom so bursts queue briefly instead of blowing the TTFT SLO.
+    #    (Scaling on "waiting" alone oscillates: scale out -> queue drains to 0 ->
+    #    desired drops -> scale in -> queue returns.)
+    - type: prometheus
+      metricType: AverageValue
+      metadata:
+        serverAddress: http://kps-kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+        query: sum(vllm:num_requests_running{namespace="inference"}) + sum(vllm:num_requests_waiting{namespace="inference"})
+        threshold: "48"
+    # 2) KV cache pressure, as a ratio to target: desired = ceil(current * value / 80).
+    #    Catches long-context traffic that fills memory before it fills batch slots.
+    - type: prometheus
+      metricType: Value
+      metadata:
+        serverAddress: http://kps-kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+        query: avg(vllm:kv_cache_usage_perc{namespace="inference"}) * 100
+        threshold: "80"

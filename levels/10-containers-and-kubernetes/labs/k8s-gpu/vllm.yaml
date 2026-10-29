@@ -1,0 +1,85 @@
+# Lab 10d: vLLM on any Kubernetes cluster with NVIDIA GPUs (device plugin or GPU Operator installed).
+# Level 12 adapts this for EKS (node pools, ALB, Pod Identity, autoscaling).
+#   kubectl create secret generic hf-token -n inference --from-literal=token=hf_xxx
+#   kubectl apply -f vllm.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vllm, namespace: inference, labels: { app: vllm } }
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # never drop capacity during a rollout
+  selector: { matchLabels: { app: vllm } }
+  template:
+    metadata:
+      labels: { app: vllm }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8000", prometheus.io/path: /metrics }
+    spec:
+      terminationGracePeriodSeconds: 120                # let in-flight streams finish
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.11.0                 # pin; upgrade deliberately
+          args:
+            - --model=meta-llama/Llama-3.1-8B-Instruct
+            - --max-model-len=8192
+            - --gpu-memory-utilization=0.90
+            - --max-num-seqs=64
+            - --enable-prefix-caching
+            - --port=8000
+          env:
+            - name: HF_TOKEN
+              valueFrom: { secretKeyRef: { name: hf-token, key: token } }
+            - { name: HF_HOME, value: /models }
+          ports: [{ containerPort: 8000, name: http }]
+          resources:
+            requests: { nvidia.com/gpu: "1", cpu: "4", memory: 24Gi }
+            limits: { nvidia.com/gpu: "1", memory: 32Gi }
+          # Model download + load + CUDA graph capture can take minutes.
+          # A startupProbe holds off liveness checks until then; without it,
+          # the kubelet kills the pod mid-load and it never becomes ready.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 90                        # up to 15 minutes
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            failureThreshold: 4
+          lifecycle:
+            preStop: { sleep: { seconds: 15 } }          # leave endpoints before SIGTERM (K8s >= 1.30)
+          volumeMounts:
+            - { name: models, mountPath: /models }
+            - { name: shm, mountPath: /dev/shm }
+      volumes:
+        - name: models
+          emptyDir: { sizeLimit: 60Gi }                  # level 12 replaces this with a faster weight cache
+        - name: shm
+          emptyDir: { medium: Memory, sizeLimit: 8Gi }   # needed for tensor parallelism (NCCL)
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vllm, namespace: inference }
+spec:
+  selector: { app: vllm }
+  ports: [{ name: http, port: 8000, targetPort: http }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vllm-headless, namespace: inference }
+spec:
+  clusterIP: None
+  selector: { app: vllm }
+  ports: [{ name: http, port: 8000, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: vllm, namespace: inference }
+spec:
+  maxUnavailable: 1
+  selector: { matchLabels: { app: vllm } }

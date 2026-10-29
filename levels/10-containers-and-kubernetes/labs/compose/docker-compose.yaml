@@ -1,0 +1,21 @@
+# Lab 10a: a 3-replica "inference fleet" + gateway + Prometheus on your laptop, no GPU.
+#   docker compose up --build
+#   then: cd platform && go run ./cmd/loadgen -url http://localhost:9000 -rate 15 -n 300 -prefix-tokens 2000 -prefix-groups 12
+#   Prometheus UI: http://localhost:9090  (try: sum by (instance) (vllm:num_requests_running))
+x-mock: &mock
+  build: { context: ../../../../platform, args: { CMD: mockllm } }
+  command: ["-addr", ":8000", "-max-num-seqs", "16", "-cache-blocks", "1000"]
+services:
+  replica-a: { <<: *mock, command: ["-addr", ":8000", "-name", "replica-a", "-max-num-seqs", "16", "-cache-blocks", "1000"] }
+  replica-b: { <<: *mock, command: ["-addr", ":8000", "-name", "replica-b", "-max-num-seqs", "16", "-cache-blocks", "1000"] }
+  replica-c: { <<: *mock, command: ["-addr", ":8000", "-name", "replica-c", "-max-num-seqs", "16", "-cache-blocks", "1000"] }
+  gateway:
+    build: { context: ../../../../platform, args: { CMD: gateway } }
+    command: ["-addr", ":9000", "-policy", "${POLICY:-prefix}",
+              "-backends", "http://replica-a:8000,http://replica-b:8000,http://replica-c:8000"]
+    ports: ["9000:9000"]
+    depends_on: [replica-a, replica-b, replica-c]
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes: ["./prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]

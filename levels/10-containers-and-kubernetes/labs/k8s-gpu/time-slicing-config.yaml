@@ -1,0 +1,15 @@
+# Lab 10f: GPU time-slicing with the NVIDIA device plugin / GPU Operator.
+# Each physical GPU is advertised as 4 schedulable nvidia.com/gpu units.
+# There is NO memory or fault isolation between the pods sharing a GPU: fine for
+# dev/test and small models, wrong for multi-tenant production (use MIG for isolation).
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: time-slicing-config, namespace: gpu-operator }
+data:
+  any: |-
+    version: v1
+    sharing:
+      timeSlicing:
+        resources:
+          - name: nvidia.com/gpu
+            replicas: 4

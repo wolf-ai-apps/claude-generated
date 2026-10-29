@@ -1,0 +1,34 @@
+# SLO-oriented alerts. Thresholds match the course SLO: p95 TTFT < 1s, p95 ITL < 60ms.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata: { name: inference-slo, namespace: inference }
+spec:
+  groups:
+    - name: inference
+      rules:
+        - alert: TTFTp95High
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket{namespace="inference"}[5m]))) > 1
+          for: 10m
+          labels: { severity: page }
+          annotations: { summary: "p95 time-to-first-token above 1s for 10m (queueing or prefill saturation)" }
+        - alert: ITLp95High
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(vllm:inter_token_latency_seconds_bucket{namespace="inference"}[5m]))) > 0.06
+          for: 10m
+          labels: { severity: page }
+          annotations: { summary: "p95 inter-token latency above 60ms (batch too large or long prefills interfering)" }
+        - alert: RequestsQueueing
+          expr: sum(vllm:num_requests_waiting{namespace="inference"}) > 20
+          for: 5m
+          labels: { severity: warn }
+          annotations: { summary: "requests are queueing; autoscaling may be capped or GPUs unavailable" }
+        - alert: KVCacheNearFull
+          expr: max(vllm:kv_cache_usage_perc{namespace="inference"}) > 0.95
+          for: 5m
+          labels: { severity: warn }
+          annotations: { summary: "KV cache >95%: expect preemptions and latency spikes" }
+        - alert: GPUXidError
+          expr: max by (Hostname, gpu) (DCGM_FI_DEV_XID_ERRORS) > 0
+          labels: { severity: page }
+          annotations: { summary: "GPU reported an Xid error: drain the node and check the GPU" }

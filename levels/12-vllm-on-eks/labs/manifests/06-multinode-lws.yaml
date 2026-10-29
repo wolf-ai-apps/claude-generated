@@ -1,0 +1,50 @@
+# Advanced (Tier 2): one model across 2 nodes x 8 GPUs with LeaderWorkerSet + Ray.
+# Tensor parallel inside a node (NVLink), pipeline parallel across nodes (EFA network).
+# Prereqs: LeaderWorkerSet controller, p5/p5e instances with EFA, the EFA device plugin,
+# a NodePool allowing those instances, and quota/capacity (usually a Capacity Block).
+# Adapted from the LWS + vLLM example; check both projects' docs for your versions.
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata: { name: vllm-405b, namespace: inference }
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 2                                    # 1 leader + 1 worker = 2 nodes
+    restartPolicy: RecreateGroupOnPodRestart   # one dead pod breaks the whole model: restart together
+    leaderTemplate:
+      metadata: { labels: { role: leader } }
+      spec:
+        tolerations: [{ key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }]
+        containers:
+          - name: vllm-leader
+            image: vllm/vllm-openai:v0.11.0
+            env:
+              - name: HF_TOKEN
+                valueFrom: { secretKeyRef: { name: hf-token, key: token } }
+            command: ["sh", "-c"]
+            args:
+              - bash /vllm-workspace/examples/online_serving/multi-node-serving.sh leader --ray_cluster_size=$(LWS_GROUP_SIZE);
+                vllm serve meta-llama/Llama-3.1-405B-Instruct-FP8 --port 8080
+                --tensor-parallel-size 8 --pipeline-parallel-size 2 --max-model-len 16384
+            resources:
+              limits: { nvidia.com/gpu: "8", vpc.amazonaws.com/efa: "32", memory: 1000Gi }
+            ports: [{ containerPort: 8080 }]
+            readinessProbe: { tcpSocket: { port: 8080 }, initialDelaySeconds: 60, periodSeconds: 10 }
+            volumeMounts: [{ name: shm, mountPath: /dev/shm }]
+        volumes: [{ name: shm, emptyDir: { medium: Memory, sizeLimit: 64Gi } }]
+    workerTemplate:
+      spec:
+        tolerations: [{ key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }]
+        containers:
+          - name: vllm-worker
+            image: vllm/vllm-openai:v0.11.0
+            env:
+              - name: HF_TOKEN
+                valueFrom: { secretKeyRef: { name: hf-token, key: token } }
+            command: ["sh", "-c"]
+            args:
+              - bash /vllm-workspace/examples/online_serving/multi-node-serving.sh worker --ray_address=$(LWS_LEADER_ADDRESS)
+            resources:
+              limits: { nvidia.com/gpu: "8", vpc.amazonaws.com/efa: "32", memory: 1000Gi }
+            volumeMounts: [{ name: shm, mountPath: /dev/shm }]
+        volumes: [{ name: shm, emptyDir: { medium: Memory, sizeLimit: 64Gi } }]

@@ -1,0 +1,7 @@
+platform/bin/
+__pycache__/
+*.pyc
+sweep-results/
+trace.json
+run.json
+*.log

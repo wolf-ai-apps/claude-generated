@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Entry point for SageMaker. SageMaker passes "serve" as $1; we ignore it.
+set -euo pipefail
+if [ -d /opt/ml/model ] && [ -n "$(ls -A /opt/ml/model 2>/dev/null)" ]; then
+  MODEL=/opt/ml/model                 # weights shipped as model data from S3 (fast, no HF at runtime)
+else
+  MODEL=${MODEL_ID:?set MODEL_ID (Hugging Face id) or provide model data in S3}
+fi
+# Extra vLLM flags come from the VLLM_ARGS environment variable, e.g.
+#   "--max-model-len 8192 --enable-prefix-caching --served-model-name llm"
+# shellcheck disable=SC2086
+exec vllm serve "$MODEL" --host 0.0.0.0 --port 8080 ${VLLM_ARGS:-}

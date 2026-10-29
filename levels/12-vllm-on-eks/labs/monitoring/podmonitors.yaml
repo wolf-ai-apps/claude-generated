@@ -1,0 +1,13 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata: { name: vllm, namespace: inference }
+spec:
+  selector: { matchLabels: { app: vllm } }
+  podMetricsEndpoints: [{ port: http, path: /metrics, interval: 15s }]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata: { name: gateway, namespace: inference }
+spec:
+  selector: { matchLabels: { app: gateway } }
+  podMetricsEndpoints: [{ port: http, path: /metrics, interval: 15s }]

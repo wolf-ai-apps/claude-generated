@@ -1,0 +1,32 @@
+# Internal ALB in front of the gateway (Auto Mode's built-in load balancing).
+# With Path B, install the AWS Load Balancer Controller and use controller ingress.k8s.aws/alb.
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata: { name: alb-internal }
+spec:
+  scheme: internal               # keep model endpoints off the internet; expose via your API layer
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata: { name: alb-internal }
+spec:
+  controller: eks.amazonaws.com/alb
+  parameters: { apiGroup: eks.amazonaws.com, kind: IngressClassParams, name: alb-internal }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway
+  namespace: inference
+  annotations:
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    # ALB's default idle timeout is 60s. A long generation with a slow first token,
+    # or a non-streaming request, can exceed it and the client sees a 504.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=600
+spec:
+  ingressClassName: alb-internal
+  rules:
+    - http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: gateway, port: { number: 9000 } } } }

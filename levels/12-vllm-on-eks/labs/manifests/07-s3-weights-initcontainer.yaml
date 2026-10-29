@@ -1,0 +1,29 @@
+# Pattern: pull weights from S3 (in-region, fast, no Hugging Face dependency at runtime)
+# into node-local storage before vLLM starts. Patch onto 02-vllm.yaml:
+#   kubectl -n inference patch deployment vllm --patch-file 07-s3-weights-initcontainer.yaml
+# IAM: create a role with s3:GetObject/ListBucket on the bucket and bind it to the
+# service account with EKS Pod Identity (see README). No access keys in the pod.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vllm, namespace: inference }
+spec:
+  template:
+    spec:
+      serviceAccountName: vllm
+      initContainers:
+        - name: fetch-weights
+          image: amazon/aws-cli:2.17.0
+          command: ["sh", "-c"]
+          args:
+            - aws s3 sync s3://YOUR-BUCKET/models/Llama-3.1-8B-Instruct /models/llama-3.1-8b --only-show-errors
+          volumeMounts: [{ name: models, mountPath: /models }]
+      containers:
+        - name: vllm
+          args:
+            - --model=/models/llama-3.1-8b
+            - --served-model-name=llama-3.1-8b
+            - --max-model-len=8192
+            - --gpu-memory-utilization=0.90
+            - --max-num-seqs=64
+            - --enable-prefix-caching
+            - --port=8000

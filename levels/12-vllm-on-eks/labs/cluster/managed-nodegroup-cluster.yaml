@@ -1,0 +1,34 @@
+# Path B: classic EKS with a managed GPU node group (you own more of the stack).
+# eksctl picks the EKS-optimized AL2023 NVIDIA AMI for GPU instance types
+# (driver + container toolkit preinstalled). You still need the NVIDIA device plugin:
+#   helm repo add nvdp https://nvidia.github.io/k8s-device-plugin
+#   helm install nvdp nvdp/nvidia-device-plugin -n kube-system \
+#     --set-json 'tolerations=[{"key":"nvidia.com/gpu","operator":"Exists","effect":"NoSchedule"}]'
+# Check first: `kubectl get ds -A | grep -i nvidia` - eksctl may already have installed it.
+#   eksctl create cluster -f managed-nodegroup-cluster.yaml
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: inference-academy
+  region: us-east-1
+  version: "1.33"
+addonsConfig:
+  autoApplyPodIdentityAssociations: true
+addons:
+  - name: eks-pod-identity-agent
+managedNodeGroups:
+  - name: system
+    instanceType: m6i.large
+    desiredCapacity: 2
+    amiFamily: AmazonLinux2023
+  - name: gpu-l4
+    instanceType: g6.2xlarge          # 1 x L4 24GB, 8 vCPU, 32 GiB
+    amiFamily: AmazonLinux2023
+    minSize: 0
+    maxSize: 4
+    desiredCapacity: 1
+    volumeSize: 200                   # container image (~10 GB) + model weights
+    labels: { workload: gpu-inference }
+    taints:
+      - { key: nvidia.com/gpu, value: "true", effect: NoSchedule }
+    privateNetworking: true

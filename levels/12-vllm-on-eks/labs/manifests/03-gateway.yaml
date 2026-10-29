@@ -1,0 +1,40 @@
+# The academy Go gateway in front of vLLM: tenant budgets + prefix-aware routing.
+# Build and push it to ECR first (see README), then replace the image below.
+apiVersion: v1
+kind: Secret
+metadata: { name: gateway-tenants, namespace: inference }
+stringData:
+  tenants: "team-search=400000,team-support=200000"   # api key = tokens per minute; use real secrets in prod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: gateway, namespace: inference, labels: { app: gateway } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: gateway } }
+  template:
+    metadata: { labels: { app: gateway } }
+    spec:
+      containers:
+        - name: gateway
+          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/academy/gateway:v1
+          args:
+            - -addr=:9000
+            - -policy=prefix
+            - -discover=vllm-headless.inference.svc.cluster.local:8000
+            - -tenants=$(TENANTS)
+          env:
+            - name: TENANTS
+              valueFrom: { secretKeyRef: { name: gateway-tenants, key: tenants } }
+          ports: [{ containerPort: 9000, name: http }]
+          readinessProbe: { httpGet: { path: /health, port: http }, periodSeconds: 5 }
+          resources:
+            requests: { cpu: 250m, memory: 128Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gateway, namespace: inference, labels: { app: gateway } }
+spec:
+  selector: { app: gateway }
+  ports: [{ name: http, port: 9000, targetPort: http }]

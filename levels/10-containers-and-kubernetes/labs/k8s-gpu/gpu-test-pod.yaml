@@ -1,0 +1,13 @@
+# Lab 10e: prove the GPU is schedulable before deploying anything big.
+#   kubectl apply -f gpu-test-pod.yaml && kubectl logs -f gpu-test
+apiVersion: v1
+kind: Pod
+metadata: { name: gpu-test }
+spec:
+  restartPolicy: Never
+  tolerations: [{ key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }]
+  containers:
+    - name: cuda
+      image: nvidia/cuda:12.4.1-base-ubuntu22.04
+      command: ["nvidia-smi"]
+      resources: { limits: { nvidia.com/gpu: "1" } }

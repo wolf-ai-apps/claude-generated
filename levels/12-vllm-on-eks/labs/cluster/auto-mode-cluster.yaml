@@ -1,0 +1,13 @@
+# Path A (recommended for this course): EKS Auto Mode.
+# Auto Mode runs Karpenter-style provisioning, the load balancer controller, EBS CSI,
+# Pod Identity and - for GPU instances - the NVIDIA driver and device plugin for you.
+#   eksctl create cluster -f auto-mode-cluster.yaml      (eksctl >= 0.195)
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: inference-academy
+  region: us-east-1          # pick a region where you HAVE G-instance quota (level 11)
+  version: "1.33"
+autoModeConfig:
+  enabled: true              # default node pools: general-purpose + system (CPU only)
+# GPU capacity comes from the NodePool in ../manifests/01-gpu-nodepool.yaml
