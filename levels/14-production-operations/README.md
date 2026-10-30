@@ -42,6 +42,19 @@ A "model change" is any of: new weights, new quantization, new engine version, n
 
 Version everything together: `model revision + quantization + engine version + flags + chat template`. A "model" in your registry is that whole tuple.
 
+```mermaid
+flowchart LR
+    C["Candidate:<br/>weights + quantization + engine version + flags + chat template"] --> E{"Offline eval gate<br/>task + safety sets"}
+    E -->|regression| X["Reject"]
+    E -->|pass| P{"Performance gate<br/>goodput at SLO, memory headroom"}
+    P -->|regression| X
+    P -->|pass| SH["Shadow traffic<br/>compare outputs and latency"]
+    SH --> CA["Canary 1-5%"]
+    CA --> M{"SLOs and errors<br/>healthy?"}
+    M -->|no| RB["Automatic rollback<br/>previous version still warm"]
+    M -->|yes| PR["Progressive rollout to 100%"]
+```
+
 ## 3. Failure modes and what to do about them
 
 | Failure | Symptom | Detection | Mitigation |
@@ -57,6 +70,29 @@ Version everything together: `model revision + quantization + engine version + f
 | Spot interruption | 2-minute notice, node drained | interruption events | stateless replicas, N+1, drain gracefully, mix on-demand baseline |
 
 **Health checks that test generation:** `/health` says the process is up. A synthetic probe that asks for 1 token every 30 s tells you the GPU path works. Run it from outside the pod (a blackbox exporter or a canary job) and alert on it.
+
+What a client sees when a replica dies, depending on timing:
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant G as Gateway
+    participant R1 as Replica 1
+    participant R2 as Replica 2
+    C->>G: request A
+    G->>R1: forward
+    R1--xG: connection refused (replica is dead)
+    G->>R2: retry: nothing was sent to the client yet
+    R2-->>G: tokens
+    G-->>C: complete answer for A
+    C->>G: request B
+    G->>R1: forward (before the crash)
+    R1-->>G: first tokens
+    G-->>C: first tokens of B
+    R1--xG: replica crashes mid-stream
+    G-->>C: stream ends without [DONE]
+    Note over C,G: B cannot be retried by the gateway: the client<br/>already has tokens. The client sees an error and decides.
+```
 
 ## 4. Security
 

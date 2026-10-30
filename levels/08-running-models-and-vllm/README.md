@@ -23,19 +23,49 @@
 
 ### 1.2 vLLM architecture
 
+```mermaid
+flowchart LR
+    CL["HTTP client"] --> API
+    subgraph API["API server (FastAPI, OpenAI-compatible)"]
+        TOK["tokenize, chat template, validate"]
+        DETOK["detokenize, stream SSE"]
+    end
+    TOK --> CORE
+    subgraph CORE["Engine core: own process, one iteration per model step"]
+        direction TB
+        SCH["Scheduler<br/>waiting, running, preempted<br/>token budget, chunked prefill"]
+        KVM["KV cache manager<br/>block pool, block tables<br/>prefix-cache hash table"]
+        SCH <--> KVM
+    end
+    CORE --> EXE["Executor"]
+    EXE --> W1["Worker GPU 0<br/>model runner, CUDA graphs, sampling"]
+    EXE --> W2["Worker GPU 1..N<br/>(tensor / pipeline parallel)"]
+    W1 --> DETOK
+    DETOK --> CL
 ```
-HTTP client ─► API server (FastAPI, OpenAI-compatible)
-                 │  tokenize, apply chat template, validate
-                 ▼
-               Engine core ── runs in its own process; a busy loop, one iteration per model step
-                 ├─ Scheduler: which requests run this step (waiting → running → finished/preempted),
-                 │             token budget, chunked prefill, priorities
-                 ├─ KV cache manager: block pool, block tables, prefix-cache hash table
-                 └─ Executor ─► Worker(s), one per GPU (TP/PP)
-                                 └─ Model runner: builds the batch, runs the model
-                                    (CUDA graphs for decode), samples tokens
-                 ▼
-               detokenize ─► stream tokens back (SSE)
+
+One request's path through the engine:
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as API server
+    participant S as Scheduler
+    participant K as KV cache manager
+    participant W as GPU worker
+    C->>A: chat request
+    A->>S: token IDs (waiting queue)
+    S->>K: allocate blocks, look up prefix cache
+    K-->>S: cached prefix blocks + new blocks
+    S->>W: step: prefill chunk (+ other requests' decodes)
+    W-->>A: first token
+    A-->>C: SSE chunk
+    loop each engine step
+        S->>W: decode this request with the rest of the batch
+        W-->>A: token
+        A-->>C: SSE chunk
+    end
+    S->>K: free blocks (full blocks stay in the prefix cache)
 ```
 
 ### 1.3 The flags that matter

@@ -30,13 +30,45 @@
 
 **Continuous batching** (Orca, 2022): the scheduler makes a decision **every step**. Finished sequences leave immediately and waiting ones join immediately. The GPU always runs the fullest batch it can.
 
+**Static batching.** C runs for 9 steps, so A and B hold their slots after finishing, and D waits for the whole batch:
+
+```mermaid
+gantt
+    title Static batching: 3 slots, one batch at a time
+    dateFormat YYYY-MM-DD
+    axisFormat step %e
+    section Slot 1
+    A            :a1, 2024-01-01, 5d
+    idle         :crit, 2024-01-06, 4d
+    D            :2024-01-10, 4d
+    section Slot 2
+    B            :b1, 2024-01-01, 2d
+    idle         :crit, 2024-01-03, 7d
+    E            :2024-01-10, 3d
+    section Slot 3
+    C            :c1, 2024-01-01, 9d
+    F            :2024-01-10, 4d
 ```
-static:      [A A A A A . . . .][D D D ...]        . = slot held by a finished request
-             [B B . . . . . . .]                    D waits for the whole first batch
-             [C C C C C C C C C]
-continuous:  [A A A A A D D D D E E ...]           slots refilled every step
-             [B B F F F F F G G G ...]
-             [C C C C C C C C C H H ...]
+
+**Continuous batching.** The scheduler refills each slot the step after it frees up:
+
+```mermaid
+gantt
+    title Continuous batching: slots refilled every step
+    dateFormat YYYY-MM-DD
+    axisFormat step %e
+    section Slot 1
+    A            :2024-01-01, 5d
+    D            :2024-01-06, 4d
+    G            :2024-01-10, 4d
+    section Slot 2
+    B            :2024-01-01, 2d
+    E            :2024-01-03, 3d
+    F            :2024-01-06, 4d
+    H            :2024-01-10, 4d
+    section Slot 3
+    C            :2024-01-01, 9d
+    I            :2024-01-10, 4d
 ```
 
 The scheduler's job each step: pick which waiting requests to admit, subject to a max batch size (`--max-num-seqs`), a token budget per step (`--max-num-batched-tokens`) and available KV blocks. If memory runs out mid-generation, it **preempts** a sequence (frees its blocks and recomputes them later), which shows up as latency spikes.
@@ -52,6 +84,35 @@ Older servers reserved `max_model_len` tokens of contiguous KV memory per reques
 - Blocks can be **shared** (reference-counted) between sequences: parallel samples (`n > 1`), beam search and common prefixes. A shared block is **copied on write**.
 - The attention kernel reads K/V by following the block table.
 
+Two sequences sharing a 2-block prefix, with 4-token blocks:
+
+```mermaid
+flowchart LR
+    subgraph A["Sequence A: block table"]
+        A0["logical 0"]
+        A1["logical 1"]
+        A2["logical 2"]
+    end
+    subgraph B["Sequence B: block table"]
+        B0["logical 0"]
+        B1["logical 1"]
+        B2["logical 2"]
+    end
+    subgraph POOL["Physical KV block pool on the GPU"]
+        P7["block 7<br/>system prompt, part 1<br/>refcount 2"]
+        P3["block 3<br/>system prompt, part 2<br/>refcount 2"]
+        P9["block 9<br/>A's question"]
+        P4["block 4<br/>B's question"]
+        PF["free blocks ..."]
+    end
+    A0 --> P7
+    A1 --> P3
+    A2 --> P9
+    B0 --> P7
+    B1 --> P3
+    B2 --> P4
+```
+
 ## 3. Prefix caching
 
 Chat traffic repeats itself: the same system prompt, few-shot examples, tool definitions, document, or conversation history on every turn. With **automatic prefix caching**, each full KV block is identified by a **hash of its tokens and of all tokens before it** (a hash chain). A new request looks up its prefix blocks. Cache hits skip prefill entirely for those tokens.
@@ -59,6 +120,21 @@ Chat traffic repeats itself: the same system prompt, few-shot examples, tool def
 - A 2,000-token system prompt plus a 50-token question means ~97% of prefill is skipped on a hit. TTFT drops from hundreds of ms to tens.
 - The cache lives **on one replica**. With 10 replicas and round-robin routing, each prefix is cached 10 times and hit rarely. That's why **prefix-aware routing** (level 10) matters.
 - SGLang's RadixAttention stores prefixes in a radix tree. The idea is the same.
+
+How a new request finds its cached prefix:
+
+```mermaid
+flowchart LR
+    REQ["New prompt"] --> SPLIT["Split into 16-token blocks"]
+    SPLIT --> H1["h1 = hash(block 1)"]
+    H1 --> H2["h2 = hash(h1 + block 2)"]
+    H2 --> H3["h3 = hash(h2 + block 3)"]
+    H1 -.->|hit| C1[("cached")]
+    H2 -.->|hit| C2[("cached")]
+    H3 -.->|miss| NEW["compute from here on"]
+```
+
+A block only matches if every block before it matched too, because each hash includes the previous one.
 
 ## 4. Chunked prefill
 
@@ -92,6 +168,24 @@ Expected tokens per target pass with acceptance rate α: `(1 − α^(k+1)) / (1 
 
 Draft sources: a small model from the same family, **n-gram / prompt lookup** (copy from the prompt; great for summarization, RAG and code edits), **Medusa** heads, **EAGLE** (a light draft head on the target's features, typically the best acceptance). **Caveat:** at high batch sizes decode becomes compute-bound, verification stops being nearly free, and speculation can *reduce* throughput. It's a latency tool for low-to-moderate load.
 
+One speculative step with k = 4:
+
+```mermaid
+sequenceDiagram
+    participant D as Draft model (small)
+    participant T as Target model (large)
+    participant S as Sampler
+    D->>D: propose x1, x2, x3, x4 (4 cheap steps)
+    D->>T: x1..x4
+    T->>T: ONE forward pass scores all 4 positions
+    T->>S: p(x1) .. p(x4), plus p for a 5th position
+    S->>S: accept x1 (p/q ≥ random)
+    S->>S: accept x2
+    S->>S: reject x3, resample from max(0, p - q)
+    S-->>T: emit x1, x2, x3' (3 tokens for 1 target pass)
+    Note over D,S: If all 4 are accepted, the 5th position<br/>gives a free bonus token
+```
+
 ## 9. Parallelism
 
 | Strategy | Split | Communication | Use when |
@@ -109,6 +203,14 @@ Rule: use the smallest TP that fits with reasonable KV room, keep TP inside an N
 Prefill (compute-bound, bursty) and decode (memory-bound, steady) interfere when they share a GPU. **Disaggregation** runs them on separate pools and ships the KV cache from prefill to decode workers over a fast interconnect (RDMA/NVLink-class transfer libraries). It improves goodput under strict TTFT and ITL SLOs at scale, at the cost of KV transfer and operational complexity (DistServe, Splitwise, Mooncake; NVIDIA Dynamo and llm-d productize the idea). Below large scale, chunked prefill usually captures most of the benefit.
 
 ---
+
+```mermaid
+flowchart LR
+    R["Request"] --> RT["Router"]
+    RT --> PF["Prefill pool<br/>compute-heavy GPUs"]
+    PF -->|"KV cache transfer<br/>RDMA / NVLink-class"| DC["Decode pool<br/>memory-bandwidth-heavy GPUs"]
+    DC -->|token stream| R
+```
 
 ## Labs
 

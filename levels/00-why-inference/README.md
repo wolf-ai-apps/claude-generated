@@ -25,16 +25,26 @@ A model trained once might serve 100 million requests a day. Over a model's life
 
 A request to a chat model, step by step:
 
-```
- client ──HTTP──► API gateway ──► router ──► inference engine (on a GPU node)
-                  auth, quotas    picks a     1. tokenize: text -> token IDs
-                                  replica     2. queue: wait for a batch slot
-                                              3. PREFILL: run the whole prompt through the model
-                                                 in one pass -> first output token
-                                              4. DECODE: loop, one token per forward pass,
-                                                 each streamed back immediately
-                                              5. stop at EOS / max_tokens / stop string
- client ◄──SSE stream of tokens────────────── 6. detokenize each token to text
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as API gateway
+    participant R as Router
+    participant E as Inference engine (GPU)
+    C->>G: POST /v1/chat/completions (stream=true)
+    G->>G: auth, tenant quota
+    G->>R: forward
+    R->>E: pick a replica
+    E->>E: tokenize: text to token IDs
+    E->>E: queue: wait for a batch slot
+    Note over E: PREFILL: whole prompt in one pass<br/>compute-bound, sets TTFT
+    E-->>C: first token (SSE)
+    loop DECODE: one forward pass per token (memory-bound, sets ITL)
+        E-->>C: next token (SSE)
+    end
+    E->>E: stop at EOS, max_tokens or a stop string
+    E-->>C: data: [DONE]
 ```
 
 Two phases, with very different behavior. The rest of the course builds on this split:
@@ -65,14 +75,18 @@ The core tension: **batching more users per GPU raises throughput and lowers cos
 
 A user asks a question with a 1,000-token prompt (system prompt + chat history) and gets a 200-token answer:
 
-```
-t=0 ms      request leaves the client
-t=40 ms     arrives at engine (network + gateway)
-t=40-120    waits in queue (other requests occupy the batch)
-t=120-320   prefill of 1,000 tokens (200 ms)        -> first token emitted
-t=330       TTFT as seen by the client = 330 ms
-t=330-4330  199 more tokens at 20 ms each (4.0 s)    -> ITL = 20 ms (50 tok/s)
-t=4330      done. End-to-end latency = 4.3 s
+```mermaid
+gantt
+    title One request: 1,000-token prompt, 200-token answer
+    dateFormat ss.SSS
+    axisFormat %S.%L s
+    section Platform
+    Network and gateway (40 ms)       :done, net, 00.000, 00.040
+    section Engine
+    Queue: waiting for a slot (80 ms) :crit, q, 00.040, 00.120
+    Prefill 1,000 tokens (200 ms)     :active, pf, 00.120, 00.320
+    TTFT = 330 ms                     :milestone, ttft, 00.330, 0s
+    Decode 199 tokens x 20 ms (4.0 s) :dec, 00.330, 04.330
 ```
 
 What each slice tells you:

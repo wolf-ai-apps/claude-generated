@@ -28,15 +28,20 @@
 
 **Anatomy of a cold start** (8B on one GPU, typical orders of magnitude):
 
+```mermaid
+gantt
+    title Cold start of one 8B replica (typical, mid-range values)
+    dateFormat mm:ss
+    axisFormat %M:%S
+    Node provisioning, if no free GPU node (60-180 s) :crit, node, 00:00, 02:00
+    Image pull (30-120 s)                             :img, after node, 75s
+    Weights download, 16 GB (20-200 s)                :w, after img, 90s
+    Load weights into GPU (5-30 s)                    :load, after w, 15s
+    CUDA graph capture and warm-up (10-60 s)          :graph, after load, 30s
+    Ready                                             :milestone, after graph, 0s
 ```
-node provisioning (if no free GPU node)  60–180 s   <- Karpenter/ASG; level 12
-image pull                               30–120 s   <- pre-pull / cache images, lazy loading (SOCI)
-weights download (16 GB)                 20–200 s   <- S3 in-region >> HF Hub; local NVMe cache
-load weights into GPU                     5–30 s
-CUDA graph capture + warm-up             10–60 s
-------------------------------------------------
-total                                    ~2–10 min  => autoscaling must react EARLY (level 12)
-```
+
+Total: about 2 to 10 minutes, so autoscaling has to react early (level 12).
 
 ### 1.3 GPUs in Kubernetes
 
@@ -61,6 +66,22 @@ total                                    ~2–10 min  => autoscaling must react 
 - **Rollouts:** `maxUnavailable: 0, maxSurge: 1`. Never drop capacity, and accept that a rollout needs a spare GPU.
 - **PodDisruptionBudget:** stops node drains from evicting all replicas at once.
 
+A vLLM pod's lifecycle with correct probes:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: no free GPU node yet
+    Pending --> Starting: scheduled, image pulled
+    Starting --> Starting: startupProbe failing while weights load and CUDA graphs are captured (liveness not checked yet)
+    Starting --> Ready: /health OK
+    Ready --> NotReady: readinessProbe fails (removed from Service)
+    NotReady --> Ready: recovers
+    Ready --> Draining: scale-in or rollout: preStop sleep, SIGTERM
+    Draining --> [*]: in-flight streams finished (grace period)
+    Ready --> Restarting: livenessProbe fails repeatedly
+    Restarting --> Starting
+```
+
 ### 1.5 Routing: why round-robin fails for LLMs
 
 Classic load balancers assume requests cost about the same. LLM requests vary **1000×** (10 vs 10,000 prompt tokens, 5 vs 2,000 output tokens), and replicas hold **state** (prefix caches).
@@ -73,6 +94,21 @@ Classic load balancers assume requests cost about the same. LLM requests vary **
 | **Prefix/KV-cache-aware** | hash of the prompt prefix (or the engines' actual cache state) | prefix cache hits → TTFT and GPU savings | hot prefixes can overload one replica → needs **bounded load** |
 
 The academy gateway (`platform/internal/gateway`) implements the first, second and fourth policies. Its prefix-aware router uses **rendezvous hashing** (removing a replica only remaps that replica's keys) plus a **bounded-load** spill. The Kubernetes **Gateway API Inference Extension** and llm-d standardize model-aware routing like this.
+
+How the academy gateway's prefix-aware router picks a replica:
+
+```mermaid
+flowchart TB
+    IN["Request arrives"] --> KEY["Routing key = first 256 characters of the prompt<br/>(system prompt, conversation history)"]
+    KEY --> RANK["Rank healthy replicas by hash(key, replica)<br/>rendezvous hashing"]
+    RANK --> TOP{"Top replica's in-flight count<br/>≤ 1.5 × average + 1?"}
+    TOP -->|yes| SEND["Send to the top replica<br/>its prefix cache likely holds this prompt"]
+    TOP -->|no| SPILL["Spill to the next replica in rank order<br/>(bounded load)"]
+    SEND --> ERR{"Connection failed before<br/>any byte was sent?"}
+    SPILL --> ERR
+    ERR -->|yes| RETRY["Retry once on the next replica"]
+    ERR -->|no| STREAM["Stream tokens to the client;<br/>client disconnect cancels upstream"]
+```
 
 ### 1.6 Autoscaling on the right signal
 

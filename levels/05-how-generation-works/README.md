@@ -11,10 +11,23 @@
 
 ### 1.1 Autoregressive decoding
 
-```
-prompt tokens ─► model ─► logits for the next token ─► sampler ─► token t1
-prompt + t1   ─► model ─► logits ─► sampler ─► t2
-prompt + t1 + t2 ─► ...           until EOS token, a stop string, or max_tokens
+```mermaid
+sequenceDiagram
+    participant S as Scheduler
+    participant M as Model
+    participant K as KV cache
+    participant P as Sampler
+    S->>M: prompt tokens (all at once)
+    Note over M,K: PREFILL
+    M->>K: store K and V for every prompt token, every layer
+    M->>P: logits for the last position
+    P-->>S: token t1
+    loop DECODE until EOS, a stop string or max_tokens
+        S->>M: only the newest token
+        M->>K: read all cached K/V, append this token's K/V
+        M->>P: logits
+        P-->>S: next token
+    end
 ```
 
 Without any cache, step *n* re-processes all *n* previous tokens, so generating N tokens costs O(N²) work.

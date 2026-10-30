@@ -40,6 +40,26 @@ The headline number for a deployment is **max goodput per replica** (or per doll
 
 In a closed loop, when the server stalls for 5 s, your 8 virtual users also stall, so no requests are *sent* during the stall and none are measured as slow. The benchmark "coordinates" with the server and **omits** exactly the samples that would have shown the problem. Percentiles look great; production users see 5 s spikes. Open-loop load (the academy loadgen's `-rate`) avoids this. The arrival schedule is computed up front and never waits for responses.
 
+The same 5-second server stall, seen by each kind of load generator:
+
+```mermaid
+sequenceDiagram
+    participant CL as Closed-loop client (2 users)
+    participant S as Server
+    participant OL as Open-loop client (2 req/s)
+    Note over S: server stalls for 5 s
+    CL->>S: request 1 (user A)
+    CL->>S: request 2 (user B)
+    OL->>S: t=0.0 s request
+    OL->>S: t=0.5 s request
+    OL->>S: t=1.0 s request
+    OL->>S: ... 10 requests arrive during the stall
+    S-->>CL: 2 slow responses
+    S-->>OL: 10 slow responses
+    Note over CL: 2 slow samples recorded.<br/>No requests sent during the stall,<br/>so the stall barely shows in p99
+    Note over OL: 10 slow samples recorded.<br/>p99 shows what users experienced
+```
+
 ### 1.5 Making the workload realistic
 
 - **Length distributions matter more than averages.** 90% short chats plus 10% long documents behaves very differently from "everyone sends 500 tokens".

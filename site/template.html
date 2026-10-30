@@ -93,6 +93,9 @@ a:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid
 .prose pre code { background: none; padding: 0; font-size: 13.5px; white-space: pre; }
 .copy { position: absolute; top: 8px; right: 8px; font: 500 11px var(--font-mono); letter-spacing: .05em; text-transform: uppercase; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--rule); background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s; }
 .prose pre:hover .copy, .copy:focus-visible { opacity: 1; }
+.diagram { margin: 4px 0 22px; padding: 16px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); overflow-x: auto; }
+.diagram pre.mermaid { margin: 0; padding: 0; border: 0; background: none; display: flex; justify-content: center; font-family: var(--font-mono); font-size: 12px; color: var(--muted); white-space: pre; }
+.diagram svg { max-width: 100%; height: auto; }
 .table-wrap { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
 .prose table { border-collapse: collapse; width: 100%; font-size: 14.5px; line-height: 1.45; }
 .prose th, .prose td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
@@ -163,6 +166,7 @@ a:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid
 
 <script id="academy-data" type="application/json">__DATA__</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
 <script>
 (function () {
   const DATA = JSON.parse(document.getElementById("academy-data").textContent);
@@ -201,7 +205,13 @@ a:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid
     const p = byId[id] || byId.home;
     content.innerHTML = marked.parse(p.md);
     content.querySelectorAll("table").forEach(t => { const w = document.createElement("div"); w.className = "table-wrap"; t.replaceWith(w); w.appendChild(t); });
-    content.querySelectorAll("pre").forEach(pre => {
+    const diagrams = [];
+    content.querySelectorAll("pre > code.language-mermaid").forEach(code => {
+      const wrap = document.createElement("div"); wrap.className = "diagram";
+      const pre = document.createElement("pre"); pre.className = "mermaid"; pre.textContent = code.textContent;
+      wrap.appendChild(pre); code.parentElement.replaceWith(wrap); diagrams.push(pre);
+    });
+    content.querySelectorAll("pre:not(.mermaid)").forEach(pre => {
       const b = document.createElement("button"); b.className = "copy"; b.type = "button"; b.textContent = "Copy";
       b.addEventListener("click", () => {
         const text = pre.querySelector("code")?.innerText ?? pre.innerText;
@@ -211,6 +221,7 @@ a:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid
       });
       pre.appendChild(b);
     });
+    drawDiagrams(diagrams);
     content.querySelectorAll('a[href^="http"]').forEach(a => { a.target = "_blank"; a.rel = "noopener"; });
 
     const meta = document.getElementById("meta");
@@ -241,6 +252,39 @@ a:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid
     document.getElementById("mobile-title").textContent = p.num ? `${p.num} · ${p.title}` : p.title;
     window.scrollTo(0, 0);
   }
+
+  // ---- diagrams ----
+  function drawDiagrams(nodes) {
+    if (!nodes.length || !window.mermaid) return;  // without the library the source stays readable as text
+    const css = getComputedStyle(document.documentElement);
+    const v = n => css.getPropertyValue(n).trim();
+    mermaid.initialize({
+      startOnLoad: false, securityLevel: "strict", theme: "base",
+      fontFamily: v("--font-body"),
+      themeVariables: {
+        background: v("--surface"), primaryColor: v("--accent-soft"), primaryTextColor: v("--ink"),
+        primaryBorderColor: v("--accent"), secondaryColor: v("--code-bg"), tertiaryColor: v("--bg"),
+        lineColor: v("--muted"), textColor: v("--ink"), mainBkg: v("--accent-soft"), nodeBorder: v("--accent"),
+        clusterBkg: v("--bg"), clusterBorder: v("--rule"), titleColor: v("--ink"), edgeLabelBackground: v("--surface"),
+        actorBkg: v("--accent-soft"), actorBorder: v("--accent"), actorTextColor: v("--ink"), actorLineColor: v("--muted"),
+        signalColor: v("--ink"), signalTextColor: v("--ink"), labelBoxBkgColor: v("--code-bg"), labelBoxBorderColor: v("--rule"),
+        labelTextColor: v("--ink"), loopTextColor: v("--ink"), noteBkgColor: v("--code-bg"), noteBorderColor: v("--signal"),
+        noteTextColor: v("--ink"), activationBkgColor: v("--code-bg"), sequenceNumberColor: v("--surface"),
+        taskBkgColor: v("--accent"), taskBorderColor: v("--accent"), taskTextColor: v("--surface"), taskTextOutsideColor: v("--ink"),
+        taskTextLightColor: v("--surface"), activeTaskBkgColor: v("--signal"), activeTaskBorderColor: v("--signal"),
+        doneTaskBkgColor: v("--muted"), doneTaskBorderColor: v("--muted"), critBkgColor: v("--signal"), critBorderColor: v("--signal"),
+        sectionBkgColor: v("--bg"), altSectionBkgColor: v("--surface"), gridColor: v("--rule"), todayLineColor: "transparent",
+        xyChart: { backgroundColor: v("--surface"), titleColor: v("--ink"), xAxisLabelColor: v("--muted"), yAxisLabelColor: v("--muted"),
+          xAxisTitleColor: v("--ink"), yAxisTitleColor: v("--ink"), xAxisLineColor: v("--rule"), yAxisLineColor: v("--rule"),
+          xAxisTickColor: v("--rule"), yAxisTickColor: v("--rule"), plotColorPalette: v("--accent") }
+      }
+    });
+    mermaid.run({ nodes }).catch(err => console.warn("diagram failed to render", err));
+  }
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  const redraw = () => render((byId[location.hash.slice(1)] || byId.home).id);
+  darkQuery.addEventListener?.("change", redraw);
+  new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
   // ---- mobile menu ----
   const side = document.getElementById("side"), scrim = document.getElementById("scrim"), menuBtn = document.getElementById("menu-btn");

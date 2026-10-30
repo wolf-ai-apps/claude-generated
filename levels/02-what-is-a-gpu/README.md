@@ -11,22 +11,24 @@
 
 ### 1.1 Anatomy of an NVIDIA GPU
 
-```
-┌──────────────────────────── GPU die ─────────────────────────────┐
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐        ┌─────────┐          │
-│  │   SM    │ │   SM    │ │   SM    │  ...   │   SM    │  (H100 SXM: 132 SMs)
-│  │ ─────── │ │         │ │         │        │         │          │
-│  │ warp    │ │         │ │         │        │         │          │
-│  │ schedulers, CUDA cores (FP32/INT), TENSOR CORES (matmul),     │
-│  │ registers, shared memory / L1 (~256 KB, on-chip SRAM)         │
-│  └─────────┘ └─────────┘ └─────────┘        └─────────┘          │
-│  ───────────────────── L2 cache (tens of MB) ─────────────────── │
-└───────────────┬──────────────────────────────────┬───────────────┘
-                │ memory controllers               │ NVLink / PCIe
-        ┌───────┴────────┐                  ┌──────┴───────┐
-        │  HBM (80-192GB │                  │ other GPUs / │
-        │  at 2-8 TB/s)  │                  │ the CPU      │
-        └────────────────┘                  └──────────────┘
+```mermaid
+flowchart TB
+    subgraph DIE["GPU die (H100 SXM: 132 SMs)"]
+        direction TB
+        subgraph SMS["Streaming Multiprocessors"]
+            direction LR
+            SM1["SM<br/>warp schedulers<br/>CUDA cores · Tensor cores<br/>registers · shared memory/L1 ~256 KB"]
+            SM2["SM"]
+            SM3["SM"]
+            SMN["... SM"]
+        end
+        L2["L2 cache (tens of MB)"]
+        SMS --- L2
+    end
+    HBM[("HBM<br/>80-192 GB at 2-8 TB/s")]
+    LINK["NVLink / PCIe<br/>other GPUs and the CPU"]
+    L2 <-->|memory controllers| HBM
+    L2 <--> LINK
 ```
 
 | Part | What it is | Why inference engineers care |

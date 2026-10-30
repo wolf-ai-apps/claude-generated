@@ -26,17 +26,16 @@ Conservative simplification: formula 3 uses the *full* context per sequence. Rea
 
 ## 2. The roofline model for LLMs
 
-```
-attainable FLOP/s = min( peak FLOP/s ,  memory bandwidth × arithmetic intensity )
+`attainable FLOP/s = min(peak FLOP/s, memory bandwidth × arithmetic intensity)`
 
-          FLOP/s ▲
-     peak ───────│...........................●━━━━━━━━━━━━━━━  compute-bound region
-                 │                        ╱  ridge point = peak / bandwidth
-                 │                     ╱       (H100: 989e12 / 3.35e12 ≈ 295 FLOPs/byte)
-                 │                  ╱
-                 │  decode b=1 ● ╱     memory-bound region (slope = bandwidth)
-                 └──────────────────────────────────────────────►  FLOPs per byte (log)
-                        1      8     32    128   295    1024
+H100 SXM in BF16: the ridge point is 989e12 / 3.35e12 ≈ 295 FLOPs/byte. Left of it, kernels are memory-bound (the slope is bandwidth); right of it, compute-bound.
+
+```mermaid
+xychart-beta
+    title "H100 roofline: attainable TFLOP/s by arithmetic intensity"
+    x-axis "FLOPs per byte (decode batch size, or prefill tokens)" [1, 8, 32, 128, 295, 512, 1024]
+    y-axis "TFLOP/s" 0 --> 1000
+    line [3.35, 26.8, 107, 429, 989, 989, 989]
 ```
 
 For the weight matmuls in BF16 (2 bytes per weight, 2 FLOPs per weight per token):

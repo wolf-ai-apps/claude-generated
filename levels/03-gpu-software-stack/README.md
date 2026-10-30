@@ -11,17 +11,25 @@
 
 ### 1.1 The layer cake
 
-```
- your code:      vLLM / SGLang / TensorRT-LLM / transformers
- framework:      PyTorch (+ Triton compiler)            ┐
- libraries:      cuBLAS (matmul), cuDNN, NCCL (multi-GPU)│ shipped INSIDE the container
-                 FlashAttention/FlashInfer kernels       │ or the pip wheel
- CUDA runtime:   libcudart (version X.Y)                 ┘
- ───────────────────────── container boundary ──────────────────────────
- container hook: NVIDIA Container Toolkit (exposes /dev/nvidia*, mounts driver libs)
- user-mode drv:  libcuda.so (comes with the driver)      ┐
- kernel driver:  nvidia.ko                               │ installed on the HOST
- hardware:       the GPU                                 ┘
+```mermaid
+flowchart TB
+    subgraph IMG["Container image or pip wheel: you choose these"]
+        direction TB
+        A["Your code: vLLM / SGLang / TensorRT-LLM / transformers"]
+        B["Framework: PyTorch + Triton compiler"]
+        C["Libraries: cuBLAS, cuDNN, NCCL, FlashAttention / FlashInfer"]
+        D["CUDA runtime: libcudart X.Y"]
+        A --> B --> C --> D
+    end
+    subgraph HOST["Host: the AMI, node image or GPU Operator installs these"]
+        direction TB
+        E["NVIDIA Container Toolkit<br/>exposes /dev/nvidia*, mounts driver libraries"]
+        F["User-mode driver: libcuda.so"]
+        G["Kernel driver: nvidia.ko"]
+        H["GPU hardware"]
+        E --> F --> G --> H
+    end
+    D -->|"needs driver version >= runtime minimum"| E
 ```
 
 | Layer | Where it lives | Who installs it | Example version |

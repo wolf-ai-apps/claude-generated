@@ -23,15 +23,25 @@ A graduate can:
 
 ## 3. Sequence
 
-```
- FOUNDATIONS            MODEL & ENGINE             SERVING                 CLOUD & PRODUCTION
- ┌──────────────┐      ┌──────────────────┐      ┌──────────────────┐    ┌───────────────────────┐
- │0 why         │      │4 models          │      │8 vLLM            │    │11 AWS foundations     │
- │1 computer    │ ───► │5 generation      │ ───► │9 benchmarks/SLOs │ ──►│12 vLLM on EKS         │
- │2 GPU         │      │6 performance math│      │10 containers/K8s │    │13 SageMaker           │
- │3 SW stack    │      │7 optimizations   │      │                  │    │14 production ops      │
- └──────────────┘      └──────────────────┘      └──────────────────┘    │15 capstone + design   │
-                                                                         └───────────────────────┘
+```mermaid
+flowchart LR
+    subgraph F["Foundations"]
+        direction TB
+        L0["0 · Why inference"] --> L1["1 · Computer basics"] --> L2["2 · What a GPU is"] --> L3["3 · GPU software stack"]
+    end
+    subgraph M["Model and engine"]
+        direction TB
+        L4["4 · Models"] --> L5["5 · Generation"] --> L6["6 · Performance math"] --> L7["7 · Optimizations"]
+    end
+    subgraph S["Serving"]
+        direction TB
+        L8["8 · vLLM"] --> L9["9 · Benchmarks and SLOs"] --> L10["10 · Containers and K8s"]
+    end
+    subgraph C["Cloud and production"]
+        direction TB
+        L11["11 · AWS foundations"] --> L12["12 · vLLM on EKS"] --> L13["13 · SageMaker"] --> L14["14 · Production ops"] --> L15["15 · Capstone"]
+    end
+    F --> M --> S --> C
 ```
 
 | Level | Core question | Key artifacts |

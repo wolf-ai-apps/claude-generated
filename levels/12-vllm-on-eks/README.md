@@ -9,17 +9,46 @@
 
 ## 1. Architecture
 
+```mermaid
+flowchart LR
+    CLIENT["Client inside the VPC<br/>or your API layer"] --> ALB["Internal ALB<br/>idle timeout 600 s"]
+    subgraph VPC["VPC · private subnets in 2-3 AZs"]
+        ALB --> GW["Gateway pods (Go, CPU nodes)<br/>API keys, token budgets<br/>prefix-aware routing"]
+        GW -->|"headless Service:<br/>one endpoint per pod"| V1["vLLM pod<br/>Llama 3.1 8B, 1x L4"]
+        GW --> V2["vLLM pod"]
+        GW --> V3["vLLM pod"]
+        PROM["Prometheus"] -.->|scrape /metrics| V1
+        PROM -.-> GW
+        PROM -.->|DCGM| V2
+        PROM --> GRAF["Grafana + alerts"]
+        PROM --> KEDA["KEDA"]
+        KEDA -->|"desired replicas"| HPA["HPA on the vLLM Deployment"]
+        HPA -->|"new pods Pending"| NP["GPU NodePool<br/>Auto Mode / Karpenter"]
+        NP -->|"launches g6 nodes"| V3
+    end
+    S3[("S3: model weights<br/>same region")] -->|"init container or streamer"| V1
 ```
-                         VPC (private subnets, 2-3 AZs)
- client ─► internal ALB ─► gateway pods (Go, CPU nodes) ──prefix-aware──► vLLM pods (GPU nodes)
-           idle timeout     - API keys / token budgets      routing over     - Llama 3.1 8B, 1x L4 each
-           600s             - DNS discovery of vLLM pods    headless Svc     - /metrics
-                            - /metrics                                      ▲
-                                                                            │ pending pods trigger
- Prometheus ◄── scrapes vLLM, gateway, DCGM ──► KEDA ──► HPA on vLLM ──────┘ new GPU nodes
-     │                                                   (replicas)        (Auto Mode / Karpenter NodePool)
-     └─► Grafana dashboards + PrometheusRule alerts (TTFT/ITL SLO, queueing, KV full, Xid)
- S3 (model weights, same region) ──► init container / streamer ──► node-local storage ──► GPU
+
+How a traffic spike turns into new capacity:
+
+```mermaid
+sequenceDiagram
+    participant U as Users
+    participant V as vLLM replicas
+    participant P as Prometheus
+    participant K as KEDA / HPA
+    participant N as GPU NodePool
+    participant E as EC2
+    U->>V: traffic rises
+    V->>P: running + waiting per replica above target
+    P->>K: query result (every 15 s)
+    K->>K: desired replicas = ceil(total / 48)
+    K->>N: new vLLM pods are Pending (no free GPU)
+    N->>E: launch a g6 instance
+    E-->>N: node Ready (1-3 min)
+    N-->>V: pod scheduled: image pull, weights, CUDA graphs
+    V-->>U: new replica Ready, queue drains
+    Note over U,E: The SLO burns for this whole window,<br/>which is why warm headroom and fast cold starts matter
 ```
 
 Two autoscalers form a chain: **KEDA/HPA** adds vLLM *pods* when work per replica exceeds its target. The pods are Pending because no GPU is free, so the **NodePool** launches GPU *nodes* that fit them. When load drops, pods scale in and empty nodes are consolidated away.

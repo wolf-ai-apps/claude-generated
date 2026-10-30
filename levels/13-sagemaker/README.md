@@ -21,10 +21,41 @@
 
 ### 1.2 What a SageMaker deployment is
 
+```mermaid
+flowchart LR
+    subgraph MODEL["Model"]
+        IMG["Container image (ECR)"]
+        ENV["Environment variables<br/>MODEL_ID, VLLM_ARGS"]
+        DATA["Optional model data<br/>S3 to /opt/ml/model"]
+    end
+    subgraph CFG["EndpointConfig"]
+        VAR["Production variant<br/>instance type and count<br/>health-check and download timeouts"]
+    end
+    subgraph EP["Endpoint (billable)"]
+        INST["Running instances"]
+        LB["Managed load balancer<br/>HTTPS API, SigV4 auth"]
+    end
+    MODEL --> CFG --> EP
 ```
-Model           = container image (ECR) + environment variables + optional model data (S3 -> /opt/ml/model)
-EndpointConfig  = production variant(s): instance type, count, health-check & download timeouts
-Endpoint        = running instances + managed load balancer + HTTPS API (SigV4-authenticated)
+
+The container contract, as SageMaker uses it:
+
+```mermaid
+sequenceDiagram
+    participant SM as SageMaker
+    participant C as Your container (vLLM)
+    participant U as Caller (boto3)
+    SM->>C: docker run image serve
+    C->>C: vllm serve MODEL --host 0.0.0.0 --port 8080
+    loop until healthy or the startup timeout
+        SM->>C: GET /ping
+        C-->>SM: 200 once the model is loaded
+    end
+    SM-->>U: endpoint InService
+    U->>SM: InvokeEndpointWithResponseStream (SigV4)
+    SM->>C: POST /invocations (OpenAI chat payload)
+    C-->>SM: SSE token stream
+    SM-->>U: PayloadPart events
 ```
 
 **The container contract:** SageMaker runs your image with the argument `serve`, health-checks `GET /ping` and sends traffic to `POST /invocations`, both on **port 8080**. vLLM's OpenAI server implements `/ping` and `/invocations` itself. The academy's BYOC image (`labs/byoc/`) only sets the port, the host and the model location.

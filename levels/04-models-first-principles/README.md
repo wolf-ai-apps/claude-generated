@@ -23,20 +23,22 @@ Models don't see text. They see **token IDs**. A tokenizer splits text into piec
 
 ### 1.3 The decoder-only transformer (Llama-style)
 
-```
-token IDs ──► embedding lookup ──► x  (shape [T, d])
-                                   │
-          ┌────────── repeated L times (L = 32 for Llama 3.1 8B) ──────────┐
-          │  h = RMSNorm(x)                                                 │
-          │  q, k, v = h @ Wq, h @ Wk, h @ Wv        (projections)          │
-          │  q, k = RoPE(q, k, positions)            (position information) │
-          │  a = softmax(q kᵀ / √d_head + causal mask) v    (ATTENTION)      │
-          │  x = x + a @ Wo                          (residual)             │
-          │  h = RMSNorm(x)                                                 │
-          │  x = x + W_down( SiLU(h @ W_gate) * (h @ W_up) )   (SwiGLU MLP) │
-          └─────────────────────────────────────────────────────────────────┘
-                                   │
-                    RMSNorm ──► x @ W_lm_head ──► logits  ([T, vocab]) ──► sampler (level 5)
+```mermaid
+flowchart TB
+    IDS["Token IDs"] --> EMB["Embedding lookup<br/>x: [T, d]"]
+    EMB --> BLOCK
+    subgraph BLOCK["Decoder block · repeated L times (32 for Llama 3.1 8B)"]
+        direction TB
+        N1["RMSNorm"] --> QKV["q, k, v = h·Wq, h·Wk, h·Wv"]
+        QKV --> ROPE["RoPE on q and k<br/>(position information)"]
+        ROPE --> ATT["Attention<br/>softmax(q·kᵀ/√d_head + causal mask)·v"]
+        ATT --> R1(("+ residual"))
+        R1 --> N2["RMSNorm"]
+        N2 --> MLP["SwiGLU MLP<br/>W_down(SiLU(h·W_gate) * h·W_up)"]
+        MLP --> R2(("+ residual"))
+    end
+    BLOCK --> NF["Final RMSNorm"] --> HEAD["LM head: x·W_lm_head"]
+    HEAD --> LOG["Logits [T, vocab]"] --> SAMP["Sampler (level 5)"]
 ```
 
 - **Attention** is the only place tokens interact. Each token's query is compared with every earlier token's key, and the scores weight a sum of their values.
