@@ -33,7 +33,7 @@ H100 SXM in BF16: the ridge point is 989e12 / 3.35e12 ≈ 295 FLOPs/byte. Left o
 ```mermaid
 xychart-beta
     title "H100 roofline: attainable TFLOP/s by arithmetic intensity"
-    x-axis "FLOPs per byte (decode batch size, or prefill tokens)" [1, 8, 32, 128, 295, 512, 1024]
+    x-axis "FLOPs per byte (decode batch size, or prefill tokens)" ["1", "8", "32", "128", "295", "512", "1024"]
     y-axis "TFLOP/s" 0 --> 1000
     line [3.35, 26.8, 107, 429, 989, 989, 989]
 ```

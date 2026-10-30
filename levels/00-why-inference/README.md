@@ -36,15 +36,15 @@ sequenceDiagram
     G->>G: auth, tenant quota
     G->>R: forward
     R->>E: pick a replica
-    E->>E: tokenize: text to token IDs
-    E->>E: queue: wait for a batch slot
-    Note over E: PREFILL: whole prompt in one pass<br/>compute-bound, sets TTFT
+    E->>E: tokenize text into token IDs
+    E->>E: wait in the queue for a batch slot
+    Note over E: PREFILL - whole prompt in one pass<br/>compute-bound, sets TTFT
     E-->>C: first token (SSE)
     loop DECODE: one forward pass per token (memory-bound, sets ITL)
         E-->>C: next token (SSE)
     end
     E->>E: stop at EOS, max_tokens or a stop string
-    E-->>C: data: [DONE]
+    E-->>C: final SSE event [DONE]
 ```
 
 Two phases, with very different behavior. The rest of the course builds on this split:
@@ -83,7 +83,7 @@ gantt
     section Platform
     Network and gateway (40 ms)       :done, net, 00.000, 00.040
     section Engine
-    Queue: waiting for a slot (80 ms) :crit, q, 00.040, 00.120
+    Queue, waiting for a slot (80 ms) :crit, q, 00.040, 00.120
     Prefill 1,000 tokens (200 ms)     :active, pf, 00.120, 00.320
     TTFT = 330 ms                     :milestone, ttft, 00.330, 0s
     Decode 199 tokens x 20 ms (4.0 s) :dec, 00.330, 04.330

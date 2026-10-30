@@ -46,7 +46,7 @@ sequenceDiagram
     K->>N: new vLLM pods are Pending (no free GPU)
     N->>E: launch a g6 instance
     E-->>N: node Ready (1-3 min)
-    N-->>V: pod scheduled: image pull, weights, CUDA graphs
+    N-->>V: pod scheduled, then image pull, weights, CUDA graphs
     V-->>U: new replica Ready, queue drains
     Note over U,E: The SLO burns for this whole window,<br/>which is why warm headroom and fast cold starts matter
 ```

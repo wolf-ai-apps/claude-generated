@@ -57,7 +57,7 @@ sequenceDiagram
     A->>S: token IDs (waiting queue)
     S->>K: allocate blocks, look up prefix cache
     K-->>S: cached prefix blocks + new blocks
-    S->>W: step: prefill chunk (+ other requests' decodes)
+    S->>W: step with a prefill chunk plus other requests' decodes
     W-->>A: first token
     A-->>C: SSE chunk
     loop each engine step

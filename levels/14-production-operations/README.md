@@ -82,7 +82,7 @@ sequenceDiagram
     C->>G: request A
     G->>R1: forward
     R1--xG: connection refused (replica is dead)
-    G->>R2: retry: nothing was sent to the client yet
+    G->>R2: retry (nothing was sent to the client yet)
     R2-->>G: tokens
     G-->>C: complete answer for A
     C->>G: request B
@@ -91,7 +91,7 @@ sequenceDiagram
     G-->>C: first tokens of B
     R1--xG: replica crashes mid-stream
     G-->>C: stream ends without [DONE]
-    Note over C,G: B cannot be retried by the gateway: the client<br/>already has tokens. The client sees an error and decides.
+    Note over C,G: The gateway cannot retry B because the client<br/>already has tokens. The client sees an error and decides.
 ```
 
 ## 4. Security

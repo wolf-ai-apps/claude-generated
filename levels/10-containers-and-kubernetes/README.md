@@ -76,7 +76,7 @@ stateDiagram-v2
     Starting --> Ready: /health OK
     Ready --> NotReady: readinessProbe fails (removed from Service)
     NotReady --> Ready: recovers
-    Ready --> Draining: scale-in or rollout: preStop sleep, SIGTERM
+    Ready --> Draining: scale-in or rollout (preStop sleep, then SIGTERM)
     Draining --> [*]: in-flight streams finished (grace period)
     Ready --> Restarting: livenessProbe fails repeatedly
     Restarting --> Starting
