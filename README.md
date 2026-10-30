@@ -6,6 +6,15 @@ The course has 16 levels. Each one has concepts, worked examples with real numbe
 
 **Running example:** a support chatbot on **Llama 3.1 8B**, which grows to 70B and multi-node. Every level asks what happens to this model and this workload at that layer.
 
+## Read the course as a website
+
+```bash
+python3 site/build.py                    # rebuilds site/index.html from the level READMEs
+python3 -m http.server -d site 8080      # open http://localhost:8080
+```
+
+Or just double-click `site/index.html`: it's one self-contained file (it needs internet for fonts and the Markdown renderer). Progress ("Mark level as done") is saved in your browser.
+
 ## Course map
 
 | # | Level | You'll be able to | Labs | Hardware |
