@@ -1,0 +1,714 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>The Life of a Prompt — explainer</title>
+<style>
+  html, body { margin: 0; background: #0e1116; }
+  canvas { display: block; width: 100vw; max-width: 1280px; height: auto; margin: 0 auto; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// A 3Blue1Brown-style explainer of the Promptlife design, drawn on a canvas.
+// Deterministic: renderFrame(seconds) draws the exact frame for that time,
+// so the renderer can step through it frame by frame. Open this file in a
+// browser to watch it live.
+
+const W = 1280, H = 720, OUT_W = 1920, OUT_H = 1080;
+const cv = document.getElementById('c');
+cv.width = OUT_W; cv.height = OUT_H;
+const ctx = cv.getContext('2d');
+
+const C = {
+  bg: '#0e1116', grid: '#1b2530', axis: '#3a4a5a',
+  white: '#ECECEC', grey: '#8A939C', dim: '#4B5560',
+  blue: '#58C4DD', teal: '#5CD0B3', green: '#83C167', yellow: '#F4D35E',
+  gold: '#F0AC5F', red: '#FC6255', purple: '#A98BD6', pink: '#E58FB5',
+};
+const SERIF = '"DejaVu Serif", Georgia, serif';
+const SANS = '"DejaVu Sans", "Helvetica Neue", Arial, sans-serif';
+const MONO = '"DejaVu Sans Mono", Menlo, monospace';
+
+// ---------- easing and timing ----------
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const smooth = x => { x = clamp(x); return x * x * x * (x * (6 * x - 15) + 10); };
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const sm = (t, a, b) => smooth(seg(t, a, b));
+const lerp = (a, b, p) => a + (b - a) * p;
+const fadeIO = (t, a, b, f = 0.35) => Math.min(sm(t, a, a + f), 1 - sm(t, b - f, b));
+
+// ---------- drawing primitives ----------
+function withAlpha(a, fn) { if (a <= 0.001) return; ctx.save(); ctx.globalAlpha *= a; fn(); ctx.restore(); }
+
+function rrPath(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+function setFont(o) { ctx.font = `${o.weight || 'normal'} ${o.size || 20}px ${o.font || SANS}`; }
+
+// Text with a "write-on" reveal: p = 0..1 of characters shown.
+function text(str, x, y, o = {}) {
+  const p = o.write ?? 1, alpha = o.alpha ?? 1;
+  if (p <= 0 || alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  setFont(o);
+  ctx.fillStyle = o.color || C.white;
+  ctx.textBaseline = o.baseline || 'middle';
+  const lines = String(str).split('\n');
+  const lh = (o.size || 20) * (o.lh || 1.3);
+  const total = lines.reduce((n, l) => n + l.length, 0);
+  let budget = p * total;
+  lines.forEach((line, i) => {
+    const full = ctx.measureText(line).width;
+    const align = o.align || 'center';
+    const x0 = align === 'center' ? x - full / 2 : align === 'right' ? x - full : x;
+    const yy = y + (i - (lines.length - 1) / 2) * lh;
+    const shown = Math.floor(clamp(budget, 0, line.length));
+    ctx.textAlign = 'left';
+    const head = line.slice(0, shown);
+    ctx.fillText(head, x0, yy);
+    if (shown < line.length && budget - shown > 0) {
+      ctx.save(); ctx.globalAlpha *= budget - shown;
+      ctx.fillText(line[shown], x0 + ctx.measureText(head).width, yy);
+      ctx.restore();
+    }
+    budget -= line.length;
+  });
+  ctx.restore();
+}
+
+// Rounded box whose outline draws itself, then fills, then shows its label.
+function box(x, y, w, h, o = {}) {
+  const p = o.p ?? 1; if (p <= 0) return;
+  const color = o.color || C.blue, r = o.r ?? 10;
+  ctx.save();
+  ctx.globalAlpha *= o.alpha ?? 1;
+  const per = 2 * (w + h);
+  const pf = sm(p, 0.45, 1);
+  if (o.glow) { ctx.shadowColor = o.glowColor || color; ctx.shadowBlur = 24 * o.glow; }
+  rrPath(x, y, w, h, r);
+  ctx.fillStyle = o.fillColor || color;
+  ctx.save(); ctx.globalAlpha *= (o.fillAlpha ?? 0.14) * pf; ctx.fill(); ctx.restore();
+  ctx.setLineDash(o.dash ? o.dash : [per * smooth(clamp(p / 0.7)), per + 20]);
+  if (o.dash) ctx.globalAlpha *= smooth(clamp(p / 0.7));
+  ctx.lineWidth = o.lw || 2.5;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+  ctx.restore();
+  if (o.label) text(o.label, x + w / 2, y + h / 2 + (o.sub ? -10 : 0), {
+    size: o.size || 20, color: o.labelColor || C.white, weight: o.weight || 'bold',
+    font: o.font || SANS, write: sm(p, 0.4, 1), alpha: o.alpha ?? 1,
+  });
+  if (o.sub) text(o.sub, x + w / 2, y + h / 2 + 14, {
+    size: o.subSize || 13, color: o.subColor || C.grey, font: o.subFont || SANS,
+    write: sm(p, 0.6, 1), alpha: o.alpha ?? 1,
+  });
+}
+
+function arrowHead(x, y, ang, size, color) {
+  ctx.save(); ctx.fillStyle = color; ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x - size * Math.cos(ang - 0.42), y - size * Math.sin(ang - 0.42));
+  ctx.lineTo(x - size * Math.cos(ang + 0.42), y - size * Math.sin(ang + 0.42));
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+function arrow(x1, y1, x2, y2, o = {}) {
+  const p = o.p ?? 1; if (p <= 0) return;
+  const color = o.color || C.grey;
+  const xe = lerp(x1, x2, smooth(p)), ye = lerp(y1, y2, smooth(p));
+  ctx.save(); ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.strokeStyle = color; ctx.lineWidth = o.lw || 2.5;
+  if (o.dash) ctx.setLineDash(o.dash);
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(xe, ye); ctx.stroke();
+  ctx.setLineDash([]);
+  if (p > 0.05 && !o.noHead) arrowHead(xe, ye, Math.atan2(y2 - y1, x2 - x1), o.head || 12, color);
+  ctx.restore();
+  if (o.label) text(o.label, (x1 + x2) / 2 + (o.lx || 0), (y1 + y2) / 2 + (o.ly ?? -14),
+    { size: o.lsize || 14, color: o.lcolor || C.grey, write: sm(p, 0.5, 1), alpha: o.alpha ?? 1 });
+}
+
+function quadPoint(x1, y1, cx, cy, x2, y2, p) {
+  const a = (1 - p) * (1 - p), b = 2 * (1 - p) * p, c = p * p;
+  return [a * x1 + b * cx + c * x2, a * y1 + b * cy + c * y2];
+}
+
+function curveArrow(x1, y1, cx, cy, x2, y2, o = {}) {
+  const p = smooth(o.p ?? 1); if (p <= 0) return;
+  const color = o.color || C.grey;
+  ctx.save(); ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.strokeStyle = color; ctx.lineWidth = o.lw || 2.5;
+  if (o.dash) ctx.setLineDash(o.dash);
+  ctx.beginPath(); ctx.moveTo(x1, y1);
+  const N = 40; let last = [x1, y1], prev = [x1, y1];
+  for (let i = 1; i <= N; i++) { prev = last; last = quadPoint(x1, y1, cx, cy, x2, y2, p * i / N); ctx.lineTo(last[0], last[1]); }
+  ctx.stroke(); ctx.setLineDash([]);
+  if (p > 0.05) arrowHead(last[0], last[1], Math.atan2(last[1] - prev[1], last[0] - prev[0]), 12, color);
+  ctx.restore();
+}
+
+function dot(x, y, r, color, alpha = 1, glow = 1) {
+  withAlpha(alpha, () => {
+    ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = 18 * glow;
+    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  });
+}
+
+function pill(str, x, y, color, alpha = 1, size = 15) {
+  withAlpha(alpha, () => {
+    setFont({ size, font: MONO });
+    const w = ctx.measureText(str).width + 24, h = size + 16;
+    rrPath(x - w / 2, y - h / 2, w, h, h / 2);
+    ctx.fillStyle = '#151b22'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.stroke();
+    text(str, x, y + 1, { size, font: MONO, color });
+  });
+}
+
+function polyPoint(pts, p) {
+  const lens = []; let total = 0;
+  for (let i = 1; i < pts.length; i++) { const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); lens.push(l); total += l; }
+  let d = clamp(p) * total;
+  for (let i = 0; i < lens.length; i++) {
+    if (d <= lens[i] || i === lens.length - 1) { const q = lens[i] ? clamp(d / lens[i]) : 1; return [lerp(pts[i][0], pts[i + 1][0], q), lerp(pts[i][1], pts[i + 1][1], q)]; }
+    d -= lens[i];
+  }
+  return pts[pts.length - 1];
+}
+
+function check(x, y, s, color, p = 1) {
+  if (p <= 0) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  const pts = [[x - s, y], [x - s / 3, y + s * 0.7], [x + s, y - s * 0.7]];
+  ctx.beginPath(); ctx.moveTo(...pts[0]);
+  const a = polyPoint(pts, smooth(p));
+  if (p < 0.4) ctx.lineTo(...a); else { ctx.lineTo(...pts[1]); ctx.lineTo(...a); }
+  ctx.stroke(); ctx.restore();
+}
+
+function cross(x, y, s, color, p = 1) {
+  if (p <= 0) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  const a = smooth(clamp(p * 2)), b = smooth(clamp(p * 2 - 1));
+  ctx.beginPath(); ctx.moveTo(x - s, y - s); ctx.lineTo(x - s + 2 * s * a, y - s + 2 * s * a);
+  if (b > 0) { ctx.moveTo(x + s, y - s); ctx.lineTo(x + s - 2 * s * b, y - s + 2 * s * b); }
+  ctx.stroke(); ctx.restore();
+}
+
+function person(x, y, color, alpha = 1) {
+  withAlpha(alpha, () => {
+    ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(x, y - 14, 9, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y + 14, 16, Math.PI, 0); ctx.stroke();
+    ctx.restore();
+  });
+}
+
+function cylinder(x, y, w, h, color, alpha = 1, label = '') {
+  withAlpha(alpha, () => {
+    ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.fillStyle = color;
+    const ry = 10;
+    ctx.beginPath(); ctx.ellipse(x + w / 2, y, w / 2, ry, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + h);
+    ctx.ellipse(x + w / 2, y + h, w / 2, ry, 0, Math.PI, 0, true); ctx.lineTo(x + w, y); ctx.stroke();
+    ctx.restore();
+    if (label) text(label, x + w / 2, y + h / 2 + 6, { size: 14, color });
+  });
+}
+
+function caption(cues, t) {
+  for (const [a, b, str] of cues) {
+    if (t < a || t > b) continue;
+    const al = fadeIO(t, a, b, 0.3);
+    withAlpha(al, () => {
+      setFont({ size: 22 });
+      const words = str.split(' '); const lines = []; let cur = '';
+      for (const w of words) { const nx = cur ? cur + ' ' + w : w; if (ctx.measureText(nx).width > 1080 && cur) { lines.push(cur); cur = w; } else cur = nx; }
+      lines.push(cur);
+      const bh = 22 + lines.length * 30;
+      const y0 = 700 - bh;
+      ctx.fillStyle = 'rgba(8,10,14,0.72)';
+      rrPath(80, y0, 1120, bh, 10); ctx.fill();
+      lines.forEach((l, i) => text(l, 640, y0 + 26 + i * 30, { size: 22, color: C.white }));
+    });
+  }
+}
+
+function chapterTag(str, t) {
+  if (!str) return;
+  text(str, 40, 36, { size: 15, color: C.grey, align: 'left', alpha: sm(t, 0.2, 0.8), font: MONO });
+}
+
+// ---------- scenes ----------
+const scenes = [];
+
+// 1 · Title
+scenes.push({ dur: 8, tag: '', cues: [[3.6, 8, 'It starts with one question.']], draw(t) {
+  text('The Life of a Prompt', 640, 240, { size: 66, font: SERIF, write: sm(t, 0.2, 2.2) });
+  text('how one question travels through an LLM agent platform', 640, 305, { size: 22, color: C.grey, alpha: sm(t, 2, 3) });
+  const a = sm(t, 3, 3.6);
+  withAlpha(a, () => {
+    rrPath(370, 395, 540, 74, 16); ctx.lineWidth = 2.5; ctx.strokeStyle = C.grey; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(420, 469); ctx.lineTo(408, 492); ctx.lineTo(446, 469); ctx.strokeStyle = C.grey; ctx.stroke();
+  });
+  text("Where's my refund for order #4417?", 640, 432, { size: 26, color: C.yellow, write: seg(t, 3.7, 6) });
+  if (t > 6 && Math.floor(t * 2) % 2 === 0) withAlpha(a, () => { ctx.fillStyle = C.yellow; ctx.fillRect(868, 418, 3, 28); });
+}});
+
+// 2 · The naive picture, then the layers
+scenes.push({ dur: 12, tag: 'the naive picture', cues: [
+  [0.3, 4.6, 'The usual picture: a question goes in, an answer comes out.'],
+  [4.8, 7.2, "But a model on its own can't look up order #4417. It has no data and can't take action."],
+  [7.4, 12, 'In practice the question passes through many layers. We will follow it through each one.'],
+], draw(t) {
+  const out = 1 - sm(t, 7, 7.8);
+  withAlpha(out, () => {
+    box(110, 320, 240, 80, { p: sm(t, 0.2, 1.4), color: C.yellow, label: 'question' });
+    box(520, 300, 240, 120, { p: sm(t, 0.6, 1.8), color: C.blue, label: 'LLM', size: 30 });
+    box(930, 320, 240, 80, { p: sm(t, 1.0, 2.2), color: C.green, label: 'answer' });
+    arrow(352, 360, 516, 360, { p: sm(t, 1.8, 2.6), color: C.grey });
+    arrow(762, 360, 926, 360, { p: sm(t, 2.2, 3.0), color: C.grey });
+    const d = seg(t, 3, 4.6);
+    if (d > 0 && d < 1) { const [x, y] = polyPoint([[230, 360], [640, 360], [1050, 360]], smooth(d)); dot(x, y, 8, C.yellow); }
+    text('?', 640, 255, { size: 56, color: C.red, font: SERIF, alpha: sm(t, 5, 5.6) });
+    text('no order data · no actions', 640, 445, { size: 16, color: C.red, alpha: sm(t, 5.4, 6) });
+  });
+  const layers = ['Application', 'Harness', 'Agent loop', 'Context & memory', 'Tools & policy', 'Model gateway', 'Model'];
+  const cols = [C.blue, C.blue, C.blue, C.teal, C.purple, C.gold, C.gold];
+  layers.forEach((name, i) => {
+    box(440, 125 + i * 62, 400, 50, { p: sm(t, 8 + i * 0.35, 9 + i * 0.35), color: cols[i], label: name, size: 19 });
+  });
+  const dd = seg(t, 10.6, 11.9);
+  if (dd > 0 && dd < 1) dot(640, lerp(100, 560, smooth(dd)), 8, C.yellow);
+}});
+
+// 3 · The agent loop
+scenes.push({ dur: 24, tag: '01 · the agent loop', cues: [
+  [0.3, 4.8, 'At the centre is a loop. Send the conversation to the model and ask what to do next.'],
+  [5, 10.8, 'If it asks for a tool, run the tool and append the result to the conversation.'],
+  [11, 16.6, 'Then ask again with everything so far. The history only ever grows.'],
+  [16.8, 24, 'When the model replies with end_turn instead of a tool call, the loop stops. That loop is the agent.'],
+], draw(t) {
+  const cx = 330, cy = 320, R = 135;
+  const ring = sm(t, 0.3, 2);
+  ctx.save(); ctx.strokeStyle = C.dim; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(cx, cy, R, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ring); ctx.stroke(); ctx.restore();
+  if (ring > 0.99) [-45, 45, 135, 225].forEach(deg => {
+    const a = deg * Math.PI / 180; arrowHead(cx + R * Math.cos(a), cy + R * Math.sin(a), a + Math.PI / 2, 12, C.dim);
+  });
+  const nodes = [['model', -90, C.blue], ['tool_use', 0, C.purple], ['run tool', 90, C.gold], ['tool_result', 180, C.gold]];
+  nodes.forEach(([n, deg, col], i) => {
+    const a = deg * Math.PI / 180, x = cx + R * Math.cos(a), y = cy + R * Math.sin(a);
+    box(x - 66, y - 21, 132, 42, { p: sm(t, 1 + i * 0.3, 2 + i * 0.3), color: col, label: n, size: 16, font: MONO, r: 21, fillAlpha: 0.9, fillColor: '#151b22' });
+  });
+  // dot travelling round the loop: two cycles, then out to the answer
+  let phase = -1, cyc = 0;
+  if (t >= 4 && t < 10) { phase = (t - 4) / 6; cyc = 1; } else if (t >= 10 && t < 16) { phase = (t - 10) / 6; cyc = 2; }
+  if (phase >= 0) {
+    const a = -Math.PI / 2 + phase * Math.PI * 2;
+    dot(cx + R * Math.cos(a), cy + R * Math.sin(a), 9, C.yellow);
+    text(`turn ${cyc}`, cx, cy, { size: 22, color: C.yellow, font: MONO });
+  }
+  const ex = seg(t, 16, 17.2);
+  if (ex > 0) {
+    arrow(cx + 40, cy - R - 20, 500, 120, { p: ex, color: C.green });
+    text('end_turn → answer', 470, 96, { size: 17, color: C.green, font: MONO, alpha: sm(t, 16.8, 17.4) });
+  }
+  // message list
+  text('messages', 650, 92, { size: 18, color: C.grey, align: 'left', font: MONO, alpha: sm(t, 1, 1.6) });
+  const msgs = [
+    [1.5, 'user', "Where's my refund for order #4417?", C.grey],
+    [5.5, 'assistant', 'tool_use  get_order(order_id="4417")', C.purple],
+    [8.5, 'user', 'tool_result  {status: "refunded", amount: 349}', C.gold],
+    [11.5, 'assistant', 'tool_use  knowledge.search("refund timing")', C.purple],
+    [14.5, 'user', 'tool_result  "Banks post refunds in 3-5 days"', C.gold],
+    [17, 'assistant', 'Refunded $349 on 12 Sep. Allow 3-5 days.', C.green],
+  ];
+  msgs.forEach(([t0, role, str, col], i) => {
+    const p = sm(t, t0, t0 + 0.6); if (p <= 0) return;
+    const y = 112 + i * 66 + (1 - p) * 20;
+    withAlpha(p, () => {
+      rrPath(650, y, 590, 54, 8); ctx.fillStyle = '#151b22'; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+      text(role, 664, y + 27, { size: 13, color: col, align: 'left', font: MONO });
+      text(str, 760, y + 27, { size: 15, color: C.white, align: 'left', font: MONO, write: sm(t, t0 + 0.2, t0 + 1.2) });
+    });
+  });
+  // the code, with the current line highlighted
+  const code = ['while True:', '    reply = model(messages, tools)', '    if reply.stop_reason != "tool_use": break', '    messages += [reply, run_tools(reply)]'];
+  let hl = -1;
+  if (phase >= 0) hl = phase < 0.2 || phase > 0.95 ? 1 : phase < 0.45 ? 2 : 3;
+  if (t >= 16) hl = 2;
+  const ca = sm(t, 2, 3);
+  code.forEach((l, i) => {
+    const y = 520 + i * 25;
+    if (i === hl) withAlpha(ca, () => { ctx.fillStyle = t >= 16 ? 'rgba(131,193,103,0.18)' : 'rgba(244,211,94,0.14)'; ctx.fillRect(52, y - 12, 470, 24); });
+    text(l, 60, y, { size: 15, font: MONO, align: 'left', color: i === hl ? C.white : C.grey, alpha: ca });
+  });
+}});
+
+// 4 · The context window
+scenes.push({ dur: 20, tag: '02 · context', cues: [
+  [0.3, 5, 'Everything the model sees on one call has to fit in its context window.'],
+  [5.2, 10, 'Tool results pile up. Past a point, more context makes answers worse. This is called context rot.'],
+  [10.2, 15, 'Compaction summarises the older turns into a short note, which frees up space.'],
+  [15.2, 20, 'Offloading moves a big output to storage and leaves a pointer. Together these are context engineering.'],
+], draw(t) {
+  const X0 = 140, Y = 270, BW = 1000, BH = 64;
+  const o = sm(t, 0.2, 1.4);
+  box(X0 - 4, Y - 4, BW + 8, BH + 8, { p: o, color: C.grey, r: 6, fillAlpha: 0.03 });
+  text('context window (tokens)', X0, Y - 30, { size: 17, color: C.grey, align: 'left', alpha: o });
+  // build segments
+  const segs = [{ w: 70, c: C.blue, l: 'system', t0: 1.5 }, { w: 80, c: C.teal, l: 'tools', t0: 2.2 }];
+  const comp = sm(t, 10.5, 13), off = sm(t, 15.5, 17.5);
+  segs.push({ w: 64 * comp, c: C.green, l: 'summary', t0: -1 });
+  const tr = [90, 70, 130, 100, 80];
+  let offX = 0;
+  for (let k = 0; k < 5; k++) {
+    const t0 = 3 + k * 1.3, shrink = k < 3 ? 1 - comp : 1;
+    segs.push({ w: 30 * shrink, c: C.grey, l: 'user', t0 });
+    segs.push({ w: 40 * shrink, c: C.purple, l: 'asst', t0: t0 + 0.3 });
+    const isOff = k === 3;
+    segs.push({ w: (isOff ? 100 - 84 * off : tr[k]) * shrink, c: C.gold, l: isOff && off > 0.6 ? 'ptr' : 'tool result', t0: t0 + 0.6, off: isOff });
+  }
+  let x = X0, fill = 0;
+  for (const s of segs) {
+    const g = s.t0 < 0 ? 1 : sm(t, s.t0, s.t0 + 0.45);
+    const w = s.w * g; if (w < 0.5) continue;
+    if (s.off) offX = x;
+    ctx.save(); ctx.fillStyle = s.c; ctx.globalAlpha = 0.85; ctx.fillRect(x, Y, w - 2, BH); ctx.restore();
+    if (w > 46) text(s.l, x + w / 2, Y + BH / 2, { size: 12, color: '#0e1116', weight: 'bold' });
+    x += w; fill += w;
+  }
+  const f = fill / BW;
+  text(`${Math.round(f * 100)}% full`, X0 + BW, Y + BH + 26, { size: 16, color: C.grey, align: 'right', font: MONO, alpha: o });
+  // quality meter
+  const q = clamp(1 - 1.6 * Math.max(0, f - 0.5));
+  withAlpha(sm(t, 4, 4.8), () => {
+    text('answer quality', 900, 140, { size: 16, color: C.grey, align: 'left' });
+    ctx.fillStyle = C.grid; ctx.fillRect(900, 160, 240, 12);
+    const col = q > 0.7 ? C.green : q > 0.45 ? C.yellow : C.red;
+    ctx.fillStyle = col; ctx.fillRect(900, 160, 240 * q, 12);
+  });
+  text('context rot', 1020, 205, { size: 18, color: C.red, alpha: fadeIO(t, 7.5, 11.5) });
+  // offloaded blob travelling to storage
+  const bp = seg(t, 15.5, 17.8);
+  cylinder(580, 470, 120, 70, C.gold, sm(t, 15, 15.8), 'blob store');
+  if (bp > 0 && bp < 1) {
+    const e = smooth(bp);
+    withAlpha(0.8, () => { ctx.fillStyle = C.gold; ctx.fillRect(lerp(offX, 600, e), lerp(Y, 480, e), lerp(100, 80, e), lerp(BH, 40, e)); });
+  }
+  if (t > 17.8) {
+    curveArrow(offX + 8, Y + BH + 4, offX + 8, 470, 578, 505, { p: sm(t, 17.8, 18.6), color: C.gold, dash: [6, 6], lw: 2 });
+    text('pointer + summary', offX + 8, Y + BH + 46, { size: 14, color: C.gold, alpha: sm(t, 18.2, 18.8), align: 'left' });
+  }
+  text('compaction', X0 + 182, Y + BH + 26, { size: 16, color: C.green, alpha: fadeIO(t, 11, 15.4) });
+}});
+
+// 5 · Engine and packs
+scenes.push({ dur: 18, tag: '03 · engine and packs', cues: [
+  [0.3, 5, 'Now zoom out. The platform is an engine that knows nothing about refunds.'],
+  [5.2, 11, 'Each use case is a pack: a folder holding a manifest, a prompt, tools, knowledge and evals.'],
+  [11.2, 18, "A new use case is just a new folder. The engine itself doesn't change."],
+], draw(t) {
+  box(70, 120, 640, 450, { p: sm(t, 0.2, 1.5), color: C.blue, label: '', fillAlpha: 0.05 });
+  text('Engine', 100, 152, { size: 26, font: SERIF, align: 'left', write: sm(t, 0.8, 1.6) });
+  text('promptlife/', 196, 154, { size: 16, font: MONO, color: C.grey, align: 'left', alpha: sm(t, 1.2, 1.8) });
+  const mods = [['Router', C.blue], ['Policy', C.red], ['Gateway', C.gold], ['Memory + RAG', C.teal], ['Guardrails', C.pink], ['Telemetry', C.purple]];
+  mods.forEach(([m, col], i) => {
+    const r = Math.floor(i / 3), c = i % 3;
+    box(100 + c * 200, 200 + r * 110, 180, 80, { p: sm(t, 1.4 + i * 0.35, 2.4 + i * 0.35), color: col, label: m, size: 17 });
+  });
+  text('API · sessions · approvals · evals', 390, 460, { size: 16, color: C.grey, alpha: sm(t, 3.8, 4.6) });
+  const pulse = fadeIO(t, 12.4, 17.6, 0.6);
+  if (pulse > 0) box(70, 120, 640, 450, { color: C.green, glow: pulse, alpha: pulse, fillAlpha: 0 });
+  text('engine: 0 lines changed', 390, 530, { size: 18, color: C.green, font: MONO, alpha: sm(t, 12.6, 13.4) });
+  box(760, 120, 450, 450, { p: sm(t, 4.6, 5.6), color: C.grey, dash: [8, 8], fillAlpha: 0.03 });
+  text('packs/', 784, 152, { size: 18, font: MONO, color: C.grey, align: 'left', alpha: sm(t, 5, 5.6) });
+  const packs = [['refunds', C.gold, 5.6], ['it_helpdesk', C.teal, 6.8], ['general', C.grey, 8.0], ['your_pack', C.green, 11.4]];
+  packs.forEach(([n, col, t0], i) => {
+    const p = sm(t, t0, t0 + 0.9); if (p <= 0) return;
+    const x = lerp(1320, 780, p), y = 180 + i * 94;
+    withAlpha(p, () => {
+      rrPath(x, y, 410, 80, 10); ctx.fillStyle = '#151b22'; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.stroke();
+      text(n, x + 20, y + 28, { size: 20, weight: 'bold', color: col, align: 'left', font: MONO });
+      text('pack.yaml · prompt.md · tools · knowledge/ · evals', x + 20, y + 56, { size: 12.5, color: C.grey, align: 'left', font: MONO });
+    });
+  });
+  arrow(756, 345, 714, 345, { p: sm(t, 9, 9.8), color: C.grey });
+}});
+
+// 6 · Routing in embedding space
+const CL = [
+  { name: 'refunds', c: C.gold, x: -2.6, y: 1.5 },
+  { name: 'it_helpdesk', c: C.teal, x: 2.6, y: 1.3 },
+  { name: 'docs_qa', c: C.purple, x: 0.2, y: -2.1 },
+];
+const OFFS = [[0.3, 0.4], [-0.5, 0.2], [0.1, -0.5], [0.6, -0.2], [-0.3, -0.35], [-0.1, 0.65], [0.45, 0.15]];
+scenes.push({ dur: 24, tag: '04 · routing', cues: [
+  [0.3, 6, "Which pack should answer? Every pack's example questions become points in embedding space."],
+  [6.2, 11.8, 'A new question lands near similar meanings. If it is close enough to one cluster, route it there. This is cheap and fast.'],
+  [12, 17.8, 'An ambiguous question falls between clusters. Then a small, fast model makes the decision.'],
+  [18, 24, 'Try the cheapest method first: rules, then embeddings, then the LLM router, then ask the user.'],
+], draw(t) {
+  const plane = 1 - sm(t, 18, 18.7);
+  const ox = 430, oy = 330, U = 70;
+  const P = (x, y) => [ox + x * U, oy - y * U];
+  withAlpha(plane, () => {
+    const g = sm(t, 0.2, 1.6);
+    ctx.save(); ctx.lineWidth = 1;
+    for (let i = -5; i <= 5; i++) { ctx.strokeStyle = i === 0 ? C.axis : C.grid; ctx.globalAlpha = g; ctx.beginPath(); ctx.moveTo(ox + i * U, 85); ctx.lineTo(ox + i * U, 575); ctx.stroke(); }
+    for (let j = -3; j <= 3; j++) { ctx.strokeStyle = j === 0 ? C.axis : C.grid; ctx.globalAlpha = g; ctx.beginPath(); ctx.moveTo(80, oy + j * U); ctx.lineTo(780, oy + j * U); ctx.stroke(); }
+    ctx.restore();
+    CL.forEach((cl, ci) => {
+      OFFS.forEach((o, i) => { const p = sm(t, 1.5 + ci * 0.5 + i * 0.07, 1.9 + ci * 0.5 + i * 0.07); const [x, y] = P(cl.x + o[0], cl.y + o[1]); dot(x, y, 6 * p, cl.c, p, 0.6); });
+      const [lx, ly] = P(cl.x, cl.y + (cl.y > 0 ? 1.45 : -1.4));
+      text(cl.name, lx, ly, { size: 17, color: cl.c, font: MONO, write: sm(t, 2.6 + ci * 0.4, 3.4 + ci * 0.4) });
+    });
+    // question 1
+    const q1 = 1 - sm(t, 11.6, 12.2);
+    withAlpha(q1, () => {
+      const [qx, qy] = P(-2.1, 1.25);
+      arrow(ox, oy, qx, qy, { p: sm(t, 6.2, 7.2), color: C.yellow, lw: 3 });
+      if (t > 7.4) CL.forEach((cl, i) => { const [cx, cy] = P(cl.x, cl.y); arrow(qx, qy, cx, cy, { p: sm(t, 7.4 + i * 0.2, 8.2 + i * 0.2), color: cl.c, dash: [5, 6], lw: 1.5, noHead: true }); });
+      const [rx, ry] = P(CL[0].x, CL[0].y);
+      withAlpha(sm(t, 8.6, 9.2), () => { ctx.save(); ctx.setLineDash([6, 6]); ctx.strokeStyle = C.gold; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(rx, ry, U * 1.05, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); });
+    });
+    // question 2
+    const q2 = sm(t, 12, 12.4);
+    withAlpha(q2, () => {
+      const [qx, qy] = P(0.1, 1.5);
+      arrow(ox, oy, qx, qy, { p: sm(t, 12.2, 13.2), color: C.yellow, lw: 3 });
+      if (t > 13.2) CL.forEach((cl, i) => { const [cx, cy] = P(cl.x, cl.y); arrow(qx, qy, cx, cy, { p: sm(t, 13.2 + i * 0.2, 14 + i * 0.2), color: cl.c, dash: [5, 6], lw: 1.5, noHead: true }); });
+      text('?', qx, qy - 30, { size: 34, color: C.yellow, font: SERIF, alpha: sm(t, 14.2, 14.8) });
+    });
+    // side panel
+    const PX = 830;
+    withAlpha(q1, () => {
+      text("Q: Where's my refund for #4417?", PX, 130, { size: 18, color: C.yellow, align: 'left', write: sm(t, 6.2, 7.6) });
+      text('cosine similarity', PX, 175, { size: 15, color: C.grey, align: 'left', alpha: sm(t, 7.6, 8) });
+      [['refunds', '0.91', C.gold], ['it_helpdesk', '0.31', C.teal], ['docs_qa', '0.18', C.purple]].forEach(([n, v, c], i) => {
+        const a = sm(t, 7.8 + i * 0.25, 8.3 + i * 0.25);
+        text(n, PX, 210 + i * 32, { size: 17, color: c, align: 'left', font: MONO, alpha: a });
+        text(v, PX + 200, 210 + i * 32, { size: 17, color: C.white, align: 'left', font: MONO, alpha: a });
+      });
+      text('0.91 ≥ 0.80 → route: refunds', PX, 330, { size: 17, color: C.green, align: 'left', font: MONO, write: sm(t, 9.4, 10.6) });
+      text('method: embeddings · ~20 ms', PX, 362, { size: 15, color: C.grey, align: 'left', alpha: sm(t, 10.4, 11) });
+    });
+    withAlpha(q2, () => {
+      text('Q: The checkout page shows a 502', PX, 130, { size: 18, color: C.yellow, align: 'left', write: sm(t, 12.2, 13.6) });
+      text('cosine similarity', PX, 175, { size: 15, color: C.grey, align: 'left', alpha: sm(t, 13.4, 13.8) });
+      [['refunds', '0.62', C.gold], ['it_helpdesk', '0.66', C.teal], ['docs_qa', '0.21', C.purple]].forEach(([n, v, c], i) => {
+        const a = sm(t, 13.6 + i * 0.25, 14.1 + i * 0.25);
+        text(n, PX, 210 + i * 32, { size: 17, color: c, align: 'left', font: MONO, alpha: a });
+        text(v, PX + 200, 210 + i * 32, { size: 17, color: C.white, align: 'left', font: MONO, alpha: a });
+      });
+      text('nothing ≥ 0.80', PX, 320, { size: 17, color: C.red, align: 'left', font: MONO, alpha: sm(t, 14.6, 15.1) });
+      box(PX, 345, 370, 48, { p: sm(t, 15, 15.8), color: C.blue, label: 'LLM router (fast model)', size: 16 });
+      text('{"pack": "it_helpdesk",', PX + 6, 420, { size: 15, color: C.green, align: 'left', font: MONO, write: sm(t, 16, 16.8) });
+      text(' "confidence": 0.84}', PX + 6, 444, { size: 15, color: C.green, align: 'left', font: MONO, write: sm(t, 16.8, 17.4) });
+    });
+  });
+  // cascade
+  const steps = [['1 · rules', '~0 ms', C.grey], ['2 · embeddings', '~20 ms', C.teal], ['3 · LLM router', '~400 ms', C.blue], ['4 · ask the user', 'last resort', C.yellow]];
+  text('cheapest first', 640, 210, { size: 26, font: SERIF, write: sm(t, 18.6, 19.6) });
+  steps.forEach(([a, b, c], i) => {
+    const x = 90 + i * 285;
+    box(x, 270, 230, 96, { p: sm(t, 19 + i * 0.5, 20 + i * 0.5), color: c, label: a, sub: b, size: 19, subSize: 15, subFont: MONO });
+    if (i < 3) arrow(x + 232, 318, x + 283, 318, { p: sm(t, 19.6 + i * 0.5, 20.2 + i * 0.5), color: C.grey, label: ['miss', '< 0.80', 'unsure'][i], ly: -16 });
+  });
+  text('every route is traced and scored by routing evals', 640, 430, { size: 17, color: C.grey, alpha: sm(t, 21.5, 22.3) });
+}});
+
+// 7 · Model gateway
+scenes.push({ dur: 16, tag: '05 · model gateway', cues: [
+  [0.3, 5, 'A pack never names a model. It asks for an alias, and the gateway picks the actual model.'],
+  [5.2, 10, 'When a model is overloaded, the gateway retries with backoff, then falls back to another model.'],
+  [10.2, 16, 'The gateway also counts tokens and cost. With no API key, it swaps in a mock model.'],
+], draw(t) {
+  const al = [['fast', C.teal], ['default', C.blue], ['deep', C.purple]];
+  const md = ['claude-haiku-4-5', 'claude-sonnet-5-5', 'claude-opus-5-5'];
+  text('aliases', 195, 160, { size: 16, color: C.grey, alpha: sm(t, 0.3, 1) });
+  text('models', 890, 160, { size: 16, color: C.grey, alpha: sm(t, 2, 2.6) });
+  al.forEach(([n, c], i) => box(120, 200 + i * 100, 150, 46, { p: sm(t, 0.3 + i * 0.2, 1.2 + i * 0.2), color: c, label: n, font: MONO, size: 18, r: 23 }));
+  box(420, 180, 140, 290, { p: sm(t, 1, 2), color: C.gold, label: '', fillAlpha: 0.08 });
+  text('gateway', 490, 205, { size: 19, weight: 'bold', write: sm(t, 1.6, 2.2) });
+  text('resolve\nretry\nfallback\nrate limit\ncost', 490, 330, { size: 14, color: C.grey, lh: 1.6, alpha: sm(t, 2, 2.8) });
+  const flash = (a, b) => fadeIO(t, a, b, 0.15);
+  const red = Math.max(flash(6.1, 6.7), flash(7.3, 7.9), flash(8.5, 9.1));
+  md.forEach((m, i) => {
+    const glow = i === 1 ? red : i === 0 ? fadeIO(t, 9.6, 12, 0.3) : 0;
+    box(760, 195 + i * 100, 260, 56, { p: sm(t, 1.6 + i * 0.2, 2.6 + i * 0.2), color: i === 1 && red > 0.2 ? C.red : C.white, label: m, font: MONO, size: 16, weight: 'normal', glow, glowColor: i === 0 ? C.green : C.red });
+  });
+  al.forEach((_, i) => {
+    arrow(272, 223 + i * 100, 418, 223 + i * 100, { p: sm(t, 2.6 + i * 0.15, 3.3 + i * 0.15), color: C.dim });
+    arrow(562, 223 + i * 100, 758, 223 + i * 100, { p: sm(t, 3 + i * 0.15, 3.7 + i * 0.15), color: C.dim });
+  });
+  // request dot: alias -> gateway -> sonnet (429) -> back, twice, then fallback to haiku
+  const Y = 323;
+  const legs = [[5, 6.1, [[195, Y], [490, Y], [760, Y]]], [6.1, 6.5, [[760, Y], [562, Y]]], [6.9, 7.3, [[562, Y], [760, Y]]], [7.3, 7.7, [[760, Y], [562, Y]]], [8.1, 8.5, [[562, Y], [760, Y]]], [8.5, 8.9, [[760, Y], [562, Y]]]];
+  for (const [a, b, pts] of legs) if (t >= a && t < b) { const [x, y] = polyPoint(pts, smooth(seg(t, a, b))); dot(x, y, 8, C.yellow); }
+  if (t >= 6.5 && t < 6.9) dot(562, Y, 8, C.yellow);
+  if (t >= 7.7 && t < 8.1) dot(562, Y, 8, C.yellow);
+  if (t >= 8.9 && t < 9.1) dot(562, Y, 8, C.yellow);
+  if (t >= 9.1 && t < 9.9) { const [x, y] = quadPoint(562, Y, 660, 223, 760, 223, smooth(seg(t, 9.1, 9.9))); dot(x, y, 8, C.yellow); }
+  text('429 rate limited', 1040, Y, { size: 16, color: C.red, align: 'left', font: MONO, alpha: fadeIO(t, 6.1, 9.2) });
+  text('retry 1 · wait 1s', 490, 500, { size: 14, color: C.yellow, font: MONO, alpha: fadeIO(t, 6.5, 7.6) });
+  text('retry 2 · wait 2s', 490, 500, { size: 14, color: C.yellow, font: MONO, alpha: fadeIO(t, 7.7, 8.8) });
+  if (t > 9.1) curveArrow(562, Y - 10, 660, 223, 756, 223, { p: sm(t, 9.1, 9.9), color: C.green, alpha: 1 - sm(t, 14, 15) });
+  text('fallback → fast', 1040, 223, { size: 16, color: C.green, align: 'left', font: MONO, alpha: sm(t, 9.8, 10.3) });
+  // mock + cost
+  box(760, 510, 260, 50, { p: sm(t, 10.4, 11.2), color: C.grey, dash: [7, 6], label: 'mock model', font: MONO, size: 16, weight: 'normal' });
+  curveArrow(490, 472, 500, 535, 756, 535, { p: sm(t, 10.8, 11.6), color: C.grey, dash: [6, 6], lw: 2 });
+  text('no API key', 600, 560, { size: 14, color: C.grey, alpha: sm(t, 11.4, 12) });
+  const k = sm(t, 12, 15);
+  withAlpha(sm(t, 11.8, 12.3), () => {
+    text(`tokens in  ${Math.round(2310 * k).toLocaleString('en-US')}`, 120, 520, { size: 16, font: MONO, align: 'left', color: C.white });
+    text(`tokens out ${Math.round(190 * k)}`, 120, 546, { size: 16, font: MONO, align: 'left', color: C.white });
+    text(`cost       $${(0.0071 * k).toFixed(4)}`, 120, 572, { size: 16, font: MONO, align: 'left', color: C.gold });
+  });
+}});
+
+// 8 · Policy at the tool boundary
+scenes.push({ dur: 18, tag: '06 · tools and policy', cues: [
+  [0.3, 4, 'Every tool call crosses one boundary: the ToolExecutor.'],
+  [4.2, 8, 'Read-only calls pass straight through.'],
+  [8.2, 12, 'Policy is code, not a prompt. A refund over $500 is blocked no matter what the model says.'],
+  [12.2, 18, 'Calls that move money pause for a human. The run waits for approval, then resumes.'],
+], draw(t) {
+  box(70, 280, 200, 90, { p: sm(t, 0.2, 1.2), color: C.blue, label: 'agent', size: 22 });
+  const wa = sm(t, 0.6, 1.6);
+  let wallCol = C.grey;
+  if (fadeIO(t, 5.3, 6.2, 0.1) > 0) wallCol = C.green;
+  if (fadeIO(t, 9.3, 11.5, 0.1) > 0) wallCol = C.red;
+  if (fadeIO(t, 13.1, 16.4, 0.1) > 0) wallCol = C.yellow;
+  withAlpha(wa, () => {
+    ctx.save(); ctx.fillStyle = wallCol; ctx.globalAlpha *= 0.25; ctx.fillRect(540, 150, 40, 320 * wa); ctx.restore();
+    ctx.save(); ctx.strokeStyle = wallCol; ctx.lineWidth = 2.5; ctx.strokeRect(540, 150, 40, 320 * wa); ctx.restore();
+  });
+  text('ToolExecutor', 560, 84, { size: 20, weight: 'bold', write: sm(t, 1.2, 2) });
+  text('validate · policy · approvals · retries · redaction', 560, 114, { size: 14, color: C.grey, alpha: sm(t, 1.8, 2.6) });
+  box(900, 200, 260, 60, { p: sm(t, 1.4, 2.3), color: C.teal, label: 'get_order', font: MONO, size: 18, glow: fadeIO(t, 6.6, 7.8, 0.3) });
+  box(900, 380, 260, 60, { p: sm(t, 1.6, 2.5), color: C.gold, label: 'issue_refund', font: MONO, size: 18, glow: fadeIO(t, 16.6, 17.9, 0.3), glowColor: C.green });
+  text('read-only', 1030, 285, { size: 13, color: C.grey, alpha: sm(t, 2.4, 3) });
+  text('side effect · moves money', 1030, 465, { size: 13, color: C.grey, alpha: sm(t, 2.6, 3.2) });
+  // call 1
+  const c1 = (a, b, pts) => { if (t >= a && t < b) { const [x, y] = polyPoint(pts, smooth(seg(t, a, b))); return [x, y]; } return null; };
+  let p1 = c1(4.2, 5.3, [[300, 325], [520, 325]]) || (t >= 5.3 && t < 5.6 ? [520, 325] : null) || c1(5.6, 6.7, [[600, 325], [890, 230]]);
+  if (p1) pill('get_order(4417)', p1[0], p1[1], C.teal);
+  text('allow', 640, 300, { size: 15, color: C.green, font: MONO, alpha: fadeIO(t, 5.3, 6.8) });
+  // call 2
+  let p2 = c1(8.2, 9.3, [[300, 325], [470, 325]]) || (t >= 9.3 && t < 10.4 ? [470 - 40 * smooth(seg(t, 9.6, 10.4)), 325] : null);
+  if (p2) pill('issue_refund($720)', p2[0], p2[1], C.red, 1 - sm(t, 9.9, 10.4));
+  cross(560, 325, 16, C.red, sm(t, 9.3, 9.8) * (1 - sm(t, 11.5, 12)));
+  text('denied: refunds over $500', 600, 260, { size: 16, color: C.red, font: MONO, align: 'left', alpha: fadeIO(t, 9.6, 12) });
+  // call 3
+  let p3 = c1(12.2, 13.1, [[300, 325], [470, 325]]) || (t >= 13.1 && t < 13.3 ? [470, 325] : null) || c1(13.3, 14.4, [[560, 470], [705, 505]]) || (t >= 14.4 && t < 15.6 ? [705, 505] : null) || c1(15.6, 16.7, [[705, 505], [890, 410]]);
+  box(590, 528, 230, 56, { p: sm(t, 12.8, 13.6), color: C.yellow, label: '', alpha: 1 - sm(t, 17.4, 18) });
+  person(625, 556, C.yellow, sm(t, 13, 13.6) * (1 - sm(t, 17.4, 18)));
+  text('approval', 712, 556, { size: 16, color: C.yellow, alpha: sm(t, 13.2, 13.8) * (1 - sm(t, 17.4, 18)) });
+  check(795, 556, 12, C.green, sm(t, 14.8, 15.4) * (1 - sm(t, 17.4, 18)) > 0 ? sm(t, 14.8, 15.4) : 0);
+  if (p3) pill('issue_refund($349)', p3[0], p3[1], C.yellow);
+  text('waiting for a human', 380, 556, { size: 15, color: C.yellow, font: MONO, alpha: fadeIO(t, 13.4, 15.2) });
+  text('approved → resumed', 380, 556, { size: 15, color: C.green, font: MONO, alpha: fadeIO(t, 15.3, 17.6) });
+}});
+
+// 9 · The whole system
+const NODES = {
+  client: [40, 130, 130, 60, 'client', C.yellow],
+  api: [210, 130, 140, 60, 'API', C.blue],
+  guard: [390, 130, 160, 60, 'guardrails', C.pink],
+  router: [590, 130, 140, 60, 'router', C.blue],
+  agent: [780, 130, 170, 60, 'agent loop', C.blue],
+  gateway: [680, 290, 170, 60, 'gateway', C.gold],
+  models: [680, 420, 170, 60, 'Claude', C.gold],
+  exec: [900, 290, 190, 60, 'ToolExecutor', C.red],
+  tools: [900, 420, 190, 60, 'tools', C.teal],
+  packs: [590, 20, 140, 50, 'packs', C.green],
+  sessions: [210, 290, 140, 60, 'sessions', C.purple],
+};
+const ctr = k => { const n = NODES[k]; return [n[0] + n[2] / 2, n[1] + n[3] / 2]; };
+const ROUTE = ['client', 'api', 'guard', 'router', 'agent', 'gateway', 'models', 'gateway', 'agent', 'exec', 'tools', 'exec', 'agent', 'guard', 'api', 'client'];
+const LANES = { api: 0, guard: 1, router: 2, agent: 3, gateway: 4, models: 4, exec: 5, tools: 5, client: 0 };
+scenes.push({ dur: 22, tag: '07 · the whole system', cues: [
+  [0.3, 6, 'Now put it together: one request, many hops.'],
+  [6.2, 12, 'It comes in through the API and the guardrails, gets routed to a pack, and is run by the agent loop.'],
+  [12.2, 18, 'The loop alternates between the model gateway and the tool boundary until the answer is ready.'],
+  [18.2, 22, 'Every hop leaves a trace span, so you can see exactly where the time and money went.'],
+], draw(t) {
+  Object.entries(NODES).forEach(([k, [x, y, w, h, l, c]], i) => box(x, y, w, h, { p: sm(t, 0.3 + i * 0.45, 1.3 + i * 0.45), color: c, label: l, size: 17 }));
+  const E = (a, b, i, o = {}) => { const [x1, y1] = ctr(a), [x2, y2] = ctr(b); const na = NODES[a], nb = NODES[b];
+    let sx = x1, sy = y1, ex = x2, ey = y2;
+    if (Math.abs(y1 - y2) < 5) { sx = x1 < x2 ? na[0] + na[2] : na[0]; ex = x1 < x2 ? nb[0] - 2 : nb[0] + nb[2] + 2; }
+    else { sy = y1 < y2 ? na[1] + na[3] : na[1]; ey = y1 < y2 ? nb[1] - 2 : nb[1] + nb[3] + 2; }
+    arrow(sx, sy, ex, ey, { p: sm(t, 4 + i * 0.3, 4.8 + i * 0.3), color: C.dim, ...o }); };
+  E('client', 'api', 0); E('api', 'guard', 1); E('guard', 'router', 2); E('router', 'agent', 3);
+  E('agent', 'gateway', 4); E('gateway', 'models', 5); E('agent', 'exec', 6); E('exec', 'tools', 7);
+  E('packs', 'router', 8); E('api', 'sessions', 9, { label: '' });
+  // trace band
+  const BX = 40, BY = 515, BW = 1200;
+  withAlpha(sm(t, 7, 8), () => {
+    ctx.strokeStyle = C.dim; ctx.lineWidth = 1.5; ctx.strokeRect(BX, BY, BW, 108);
+    text('trace', BX + 10, BY - 14, { size: 14, color: C.grey, align: 'left', font: MONO });
+  });
+  const T0 = 9, HOP = 0.7;
+  const totalHops = ROUTE.length - 1;
+  for (let i = 0; i < totalHops; i++) {
+    const a = T0 + i * HOP, b = a + HOP;
+    if (t >= a && t < b) { const [x, y] = polyPoint([ctr(ROUTE[i]), ctr(ROUTE[i + 1])], smooth(seg(t, a, b))); dot(x, y, 9, C.yellow); }
+    const lane = LANES[ROUTE[i + 1]];
+    const w = (HOP / (totalHops * HOP)) * (BW - 40);
+    const x0 = BX + 20 + i * w;
+    const p = seg(t, a, b);
+    if (p > 0) { const col = NODES[ROUTE[i + 1]][5]; ctx.save(); ctx.fillStyle = col; ctx.globalAlpha = 0.8; ctx.fillRect(x0, BY + 12 + lane * 15, (w - 3) * p, 11); ctx.restore(); }
+  }
+  if (t >= T0 + totalHops * HOP) dot(...ctr('client'), 9, C.green);
+  text("Refunded $349 on 12 Sep.", 105, 220, { size: 15, color: C.green, alpha: sm(t, T0 + totalHops * HOP, T0 + totalHops * HOP + 0.5) });
+}});
+
+// 10 · Closing
+scenes.push({ dur: 11, tag: '', cues: [], draw(t) {
+  text('Packs change. The engine stays.', 640, 220, { size: 36, font: SERIF, write: sm(t, 0.4, 2.2) });
+  text('Policy lives in code, at the tool boundary.', 640, 300, { size: 30, font: SERIF, color: C.blue, write: sm(t, 2.4, 4.2) });
+  text('Every hop is measured.', 640, 375, { size: 30, font: SERIF, color: C.gold, write: sm(t, 4.4, 5.6) });
+  text('Promptlife · The Life of a Prompt', 640, 520, { size: 18, color: C.grey, font: MONO, alpha: sm(t, 6.5, 7.5) });
+}});
+
+// ---------- timeline ----------
+const starts = []; let acc = 0;
+for (const s of scenes) { starts.push(acc); acc += s.dur; }
+const TOTAL = acc;
+window.TOTAL = TOTAL;
+
+window.renderFrame = function (T) {
+  ctx.setTransform(OUT_W / W, 0, 0, OUT_H / H, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+  let i = 0; while (i < scenes.length - 1 && T >= starts[i + 1]) i++;
+  const s = scenes[i], t = T - starts[i];
+  const a = Math.min(sm(t, 0, 0.45), 1 - sm(t, s.dur - 0.45, s.dur));
+  ctx.save(); ctx.globalAlpha = a;
+  s.draw(t);
+  chapterTag(s.tag, t);
+  caption(s.cues, t);
+  ctx.restore();
+};
+
+// live preview when opened directly in a browser
+if (!window.__RENDER__) {
+  const t0 = performance.now();
+  const loop = () => { const T = ((performance.now() - t0) / 1000) % TOTAL; window.renderFrame(T); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
